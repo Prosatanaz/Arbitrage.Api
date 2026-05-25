@@ -1,24 +1,6 @@
 {
-  "updatedAt": "2026-05-25T10:32:35.7768408+00:00",
+  "updatedAt": "2026-05-25T11:48:40.7086909+00:00",
   "pairs": [
-    {
-      "tradingPair": "$BP-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "$NEX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "$UP-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual"
-      ]
-    },
     {
       "tradingPair": "0G-USDT",
       "supportedConnectors": [
@@ -271,36 +253,6 @@
       ]
     },
     {
-      "tradingPair": "AAOI-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AAPL-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AAPLSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AAPLX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
       "tradingPair": "AAVE-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -314,21 +266,9 @@
       ]
     },
     {
-      "tradingPair": "ABBV-USDT",
-      "supportedConnectors": [
-        "gate_io_perpetual"
-      ]
-    },
-    {
       "tradingPair": "ABBVON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "ABBVSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -360,12 +300,6 @@
         "kucoin_perpetual",
         "mexc_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "ACN-USDT",
-      "supportedConnectors": [
-        "gate_io_perpetual"
       ]
     },
     {
@@ -431,12 +365,6 @@
       "tradingPair": "ADBE-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "ADBESTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -750,28 +678,6 @@
       ]
     },
     {
-      "tradingPair": "AMATSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AMD-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AMDSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "AMGNON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
@@ -781,28 +687,6 @@
       "tradingPair": "AMP-USDT",
       "supportedConnectors": [
         "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AMZN-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AMZNSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AMZNX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual"
       ]
     },
     {
@@ -857,15 +741,6 @@
       ]
     },
     {
-      "tradingPair": "ANTHROPIC-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "mexc_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "APE-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -911,12 +786,6 @@
         "bitget_perpetual",
         "bitmart_perpetual",
         "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "APLDSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -1032,23 +901,6 @@
       ]
     },
     {
-      "tradingPair": "ARM-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "ARMSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "ARPA-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -1056,21 +908,6 @@
         "bybit_perpetual",
         "gate_io_perpetual",
         "kucoin_perpetual",
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "ASML-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "ASMLSTOCK-USDT",
-      "supportedConnectors": [
         "mexc_perpetual"
       ]
     },
@@ -1132,22 +969,9 @@
       ]
     },
     {
-      "tradingPair": "ASTS-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "kucoin_perpetual"
-      ]
-    },
-    {
       "tradingPair": "ASTSON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "ASTSSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -1256,23 +1080,6 @@
         "kucoin_perpetual",
         "mexc_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AVGO-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "AVGOSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -1386,30 +1193,6 @@
       ]
     },
     {
-      "tradingPair": "BA-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "BABA-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "BABASTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "BABY-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -1426,12 +1209,6 @@
       "tradingPair": "BAC-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "BACSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -1539,12 +1316,6 @@
       ]
     },
     {
-      "tradingPair": "BASTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "BAT-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -1587,15 +1358,6 @@
       "supportedConnectors": [
         "kucoin_perpetual",
         "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "BE-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual"
       ]
     },
     {
@@ -1648,12 +1410,6 @@
         "kucoin_perpetual",
         "mexc_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "BESTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -1831,12 +1587,6 @@
       ]
     },
     {
-      "tradingPair": "BMNRSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "BMT-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -1968,12 +1718,6 @@
         "bitmart_perpetual",
         "gate_io_perpetual",
         "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "BRKBSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -2212,12 +1956,6 @@
         "gate_io_perpetual",
         "kucoin_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "CBRSSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -2480,31 +2218,6 @@
       ]
     },
     {
-      "tradingPair": "COHR-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "COHRSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "COIN-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "COINBASE-USDT",
       "supportedConnectors": [
         "mexc_perpetual"
@@ -2575,12 +2288,6 @@
       ]
     },
     {
-      "tradingPair": "COPSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "CORE-USDT",
       "supportedConnectors": [
         "bitmart_perpetual",
@@ -2606,12 +2313,6 @@
         "gate_io_perpetual",
         "kucoin_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "COSTSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -2653,12 +2354,6 @@
       ]
     },
     {
-      "tradingPair": "CRCLSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "CRCLX-USDT",
       "supportedConnectors": [
         "bitmart_perpetual",
@@ -2676,12 +2371,6 @@
       "tradingPair": "CRM-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "CRMSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -2728,57 +2417,13 @@
       ]
     },
     {
-      "tradingPair": "CRWDSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "CRWV-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "CRWVSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "CSCO-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "CSCOON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
       ]
     },
     {
-      "tradingPair": "CSCOSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "CSPR-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "CSTOCK-USDT",
       "supportedConnectors": [
         "mexc_perpetual"
       ]
@@ -2837,12 +2482,6 @@
       ]
     },
     {
-      "tradingPair": "CVNASTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "CVX-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -2853,12 +2492,6 @@
         "kucoin_perpetual",
         "mexc_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "CVXSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -3010,12 +2643,6 @@
       ]
     },
     {
-      "tradingPair": "DISSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "DODO-USDT",
       "supportedConnectors": [
         "kucoin_perpetual",
@@ -3090,18 +2717,6 @@
       "tradingPair": "DOT-USDT",
       "supportedConnectors": [
         "binance_perpetual",
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "mexc_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "DRAM-USDT",
-      "supportedConnectors": [
         "bitget_perpetual",
         "bitmart_perpetual",
         "bybit_perpetual",
@@ -3626,12 +3241,6 @@
       ]
     },
     {
-      "tradingPair": "FIGSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "FIL-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -3661,12 +3270,6 @@
         "bitmart_perpetual",
         "gate_io_perpetual",
         "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "FLNCSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -3840,12 +3443,6 @@
       ]
     },
     {
-      "tradingPair": "FUTUSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "G-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -3943,12 +3540,6 @@
       ]
     },
     {
-      "tradingPair": "GESTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "GEV-USDT",
       "supportedConnectors": [
         "okx_perpetual"
@@ -3958,12 +3549,6 @@
       "tradingPair": "GEVON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "GEVSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -4002,35 +3587,6 @@
       "tradingPair": "GLMR-USDT",
       "supportedConnectors": [
         "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "GLW-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "GLWSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "GME-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "GMESTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -4089,28 +3645,6 @@
       "supportedConnectors": [
         "bybit_perpetual",
         "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "GOOGL-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "GOOGLSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "GOOGLX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual"
       ]
     },
     {
@@ -4281,12 +3815,6 @@
       ]
     },
     {
-      "tradingPair": "HDSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "HEI-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -4340,12 +3868,6 @@
       ]
     },
     {
-      "tradingPair": "HIMSSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "HIVE-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -4353,14 +3875,6 @@
         "bybit_perpetual",
         "gate_io_perpetual",
         "kucoin_perpetual",
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "HK50-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual",
         "mexc_perpetual"
       ]
     },
@@ -4521,12 +4035,6 @@
       "tradingPair": "IBMON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "IBMSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -4695,32 +4203,9 @@
       ]
     },
     {
-      "tradingPair": "INTC-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "INTCSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "INTU-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "INTUSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -4757,12 +4242,6 @@
       "tradingPair": "IONQON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "IONQSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -4840,12 +4319,6 @@
       ]
     },
     {
-      "tradingPair": "IRENSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "IRYS-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -4885,14 +4358,6 @@
       "tradingPair": "IWFON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "IWM-USDT",
-      "supportedConnectors": [
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "okx_perpetual"
       ]
     },
     {
@@ -4952,12 +4417,6 @@
       ]
     },
     {
-      "tradingPair": "JDSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "JELLYJELLY-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -4998,12 +4457,6 @@
         "bitmart_perpetual",
         "gate_io_perpetual",
         "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "JPMSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -5189,12 +4642,6 @@
       ]
     },
     {
-      "tradingPair": "KLACSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "KMNO-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -5237,12 +4684,6 @@
       "supportedConnectors": [
         "bitget_perpetual",
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "KOSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -5411,39 +4852,10 @@
       ]
     },
     {
-      "tradingPair": "LITESTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "LLY-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "LLYSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "LMT-USDT",
       "supportedConnectors": [
         "bitmart_perpetual",
         "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "LMTSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -5497,12 +4909,6 @@
       "tradingPair": "LRCX-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "LRCXSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -5706,12 +5112,6 @@
       ]
     },
     {
-      "tradingPair": "MASTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "MAV-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -5753,21 +5153,6 @@
         "bybit_perpetual",
         "gate_io_perpetual",
         "kucoin_perpetual",
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "MCD-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "MCDSTOCK-USDT",
-      "supportedConnectors": [
         "mexc_perpetual"
       ]
     },
@@ -5866,21 +5251,6 @@
         "kucoin_perpetual",
         "mexc_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "META-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "METASTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -6097,65 +5467,9 @@
       ]
     },
     {
-      "tradingPair": "MRVL-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "MRVLON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "MRVLSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "MSFT-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "MSFTSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "MSTR-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "MSTRSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "MSTRX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual"
       ]
     },
     {
@@ -6170,17 +5484,6 @@
       ]
     },
     {
-      "tradingPair": "MU-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "MUBARAK-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -6191,12 +5494,6 @@
         "kucoin_perpetual",
         "mexc_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "MUSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -6245,24 +5542,9 @@
       ]
     },
     {
-      "tradingPair": "NBIS-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "NBISON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "NBISSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -6338,22 +5620,6 @@
       ]
     },
     {
-      "tradingPair": "NFLX-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "NFLXSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "NFP-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -6414,12 +5680,6 @@
       ]
     },
     {
-      "tradingPair": "NKESTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "NMR-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -6436,13 +5696,6 @@
       "supportedConnectors": [
         "bitmart_perpetual",
         "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "NOKSTOCK-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual"
       ]
     },
     {
@@ -6477,32 +5730,10 @@
       ]
     },
     {
-      "tradingPair": "NOWSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "NPC-USDT",
       "supportedConnectors": [
         "kucoin_perpetual",
         "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "NVDA-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "NVDAX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual"
       ]
     },
     {
@@ -6630,12 +5861,6 @@
       ]
     },
     {
-      "tradingPair": "ONDSSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "ONE-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -6755,21 +5980,6 @@
       ]
     },
     {
-      "tradingPair": "ORCL-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "ORCLSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "ORCLX-USDT",
       "supportedConnectors": [
         "bitmart_perpetual",
@@ -6823,21 +6033,9 @@
       ]
     },
     {
-      "tradingPair": "OXYSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "PANWON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "PANWSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -6874,12 +6072,6 @@
       ]
     },
     {
-      "tradingPair": "PAYPSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "PBRON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
@@ -6889,12 +6081,6 @@
       "tradingPair": "PDDON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "PDDSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -6982,12 +6168,6 @@
       "supportedConnectors": [
         "bitmart_perpetual",
         "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "PGSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -7082,21 +6262,6 @@
       "tradingPair": "PLAYSOUT-USDT",
       "supportedConnectors": [
         "bybit_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "PLTR-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "PLTRSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -7358,12 +6523,6 @@
       ]
     },
     {
-      "tradingPair": "PYPLSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "PYR-USDT",
       "supportedConnectors": [
         "bybit_perpetual",
@@ -7402,22 +6561,6 @@
       ]
     },
     {
-      "tradingPair": "QCOM-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "QCOMSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "QNT-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -7427,28 +6570,6 @@
         "gate_io_perpetual",
         "kucoin_perpetual",
         "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "QQQ-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "QQQSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "QQQX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual"
       ]
     },
     {
@@ -7530,12 +6651,6 @@
       "tradingPair": "RDDTON-USDT",
       "supportedConnectors": [
         "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "RDDTSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -7677,25 +6792,9 @@
       ]
     },
     {
-      "tradingPair": "RKLB-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "RKLBON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "RKLBSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -7815,12 +6914,6 @@
       ]
     },
     {
-      "tradingPair": "RTXSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "RUNE-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -7894,12 +6987,6 @@
       ]
     },
     {
-      "tradingPair": "SAMSUNGSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "SAND-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -7959,12 +7046,6 @@
       "tradingPair": "SBUXON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SBUXSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -8050,19 +7131,6 @@
       ]
     },
     {
-      "tradingPair": "SHELL-USDT",
-      "supportedConnectors": [
-        "binance_perpetual",
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "mexc_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "SHIB-USDT",
       "supportedConnectors": [
         "bitget_perpetual",
@@ -8094,12 +7162,6 @@
       ]
     },
     {
-      "tradingPair": "SHOPSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "SIGN-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -8127,12 +7189,6 @@
         "bybit_perpetual",
         "gate_io_perpetual",
         "kucoin_perpetual",
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SKHYNIXSTOCK-USDT",
-      "supportedConnectors": [
         "mexc_perpetual"
       ]
     },
@@ -8208,36 +7264,6 @@
       ]
     },
     {
-      "tradingPair": "SMCI-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SMCISTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SNDK-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SNDKSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "SNOW-USDT",
       "supportedConnectors": [
         "gate_io_perpetual"
@@ -8247,12 +7273,6 @@
       "tradingPair": "SNOWON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SNOWSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -8380,17 +7400,6 @@
       ]
     },
     {
-      "tradingPair": "SOXL-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "SOXS-USDT",
       "supportedConnectors": [
         "bitget_perpetual",
@@ -8436,19 +7445,6 @@
         "gate_io_perpetual",
         "mexc_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SPCX-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SPCXSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -8498,12 +7494,6 @@
       ]
     },
     {
-      "tradingPair": "SPOTSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "SPX-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -8525,22 +7515,6 @@
       ]
     },
     {
-      "tradingPair": "SPY-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SPYX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
       "tradingPair": "SQD-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -8550,13 +7524,6 @@
         "gate_io_perpetual",
         "kucoin_perpetual",
         "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "SQQQ-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "kucoin_perpetual"
       ]
     },
     {
@@ -8694,13 +7661,6 @@
       "tradingPair": "STXON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "STXSTOCK-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "mexc_perpetual"
       ]
     },
     {
@@ -9040,20 +8000,6 @@
       ]
     },
     {
-      "tradingPair": "TQQQ-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "TQQQX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
       "tradingPair": "TRAC-USDT",
       "supportedConnectors": [
         "mexc_perpetual"
@@ -9190,41 +8136,9 @@
       ]
     },
     {
-      "tradingPair": "TSLA-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "TSLAX-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "TSM-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "TSMON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "TSMSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -9302,12 +8216,6 @@
       ]
     },
     {
-      "tradingPair": "TXNSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "UAI-USDT",
       "supportedConnectors": [
         "binance_perpetual",
@@ -9338,12 +8246,6 @@
         "bitmart_perpetual",
         "gate_io_perpetual",
         "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "UBERSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -9387,20 +8289,6 @@
       "tradingPair": "UNGON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "UNH-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "UNHSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -9477,12 +8365,6 @@
         "gate_io_perpetual",
         "kucoin_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "USARSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -9716,21 +8598,9 @@
       ]
     },
     {
-      "tradingPair": "VRTSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "VRTXON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "VSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -9764,12 +8634,6 @@
       "tradingPair": "VZON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "VZSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -9838,24 +8702,9 @@
       ]
     },
     {
-      "tradingPair": "WDC-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
       "tradingPair": "WDCON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "WDCSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -9875,12 +8724,6 @@
       "tradingPair": "WFCON-USDT",
       "supportedConnectors": [
         "bitmart_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "WFCSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
       ]
     },
     {
@@ -9943,21 +8786,6 @@
       ]
     },
     {
-      "tradingPair": "WMT-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "WMTSTOCK-USDT",
-      "supportedConnectors": [
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "WOJAK-USDT",
       "supportedConnectors": [
         "mexc_perpetual"
@@ -9981,17 +8809,6 @@
       "supportedConnectors": [
         "kucoin_perpetual",
         "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "XAG-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "okx_perpetual"
       ]
     },
     {
@@ -10026,41 +8843,11 @@
       ]
     },
     {
-      "tradingPair": "XAU-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "XAUT-USDT",
-      "supportedConnectors": [
-        "binance_perpetual",
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "bybit_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual",
-        "mexc_perpetual"
-      ]
-    },
-    {
       "tradingPair": "XCN-USDT",
       "supportedConnectors": [
         "bybit_perpetual",
         "gate_io_perpetual",
         "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "XCU-USDT",
-      "supportedConnectors": [
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "okx_perpetual"
       ]
     },
     {
@@ -10146,21 +8933,6 @@
         "bybit_perpetual",
         "gate_io_perpetual",
         "kucoin_perpetual",
-        "mexc_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "XOM-USDT",
-      "supportedConnectors": [
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual",
-        "kucoin_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "XOMSTOCK-USDT",
-      "supportedConnectors": [
         "mexc_perpetual"
       ]
     },
@@ -10515,43 +9287,6 @@
         "kucoin_perpetual",
         "mexc_perpetual",
         "okx_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "\u5E01\u5B89\u4EBA\u751F-USDT",
-      "supportedConnectors": [
-        "binance_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "\u6211\u8E0F\u9A6C\u6765\u4E86-USDT",
-      "supportedConnectors": [
-        "binance_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "\u8001\u5B50-USDT",
-      "supportedConnectors": [
-        "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "\u8349\u6839\u6587\u5316-USDT",
-      "supportedConnectors": [
-        "gate_io_perpetual"
-      ]
-    },
-    {
-      "tradingPair": "\u9F99\u867E-USDT",
-      "supportedConnectors": [
-        "binance_perpetual",
-        "bitget_perpetual",
-        "bitmart_perpetual",
-        "gate_io_perpetual"
       ]
     }
   ]

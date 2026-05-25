@@ -14,17 +14,20 @@ public sealed class TradingPairUniverseRefreshService
     private readonly IEnumerable<ITradingPairDiscoveryClient> _clients;
     private readonly TradingPairUniverseOptions _options;
     private readonly IHostEnvironment _environment;
+    private readonly TradingPairFilter _tradingPairFilter;
     private readonly ILogger<TradingPairUniverseRefreshService> _logger;
 
     public TradingPairUniverseRefreshService(
         IEnumerable<ITradingPairDiscoveryClient> clients,
         IOptions<TradingPairUniverseOptions> options,
         IHostEnvironment environment,
+        TradingPairFilter tradingPairFilter,
         ILogger<TradingPairUniverseRefreshService> logger)
     {
         _clients = clients;
         _options = options.Value;
         _environment = environment;
+        _tradingPairFilter = tradingPairFilter;
         _logger = logger;
     }
 
@@ -91,9 +94,11 @@ public sealed class TradingPairUniverseRefreshService
                 "Trading pair discovery failed for all enabled connectors. Existing universe file will not be overwritten.");
         }
 
+        var filteredPairs = ApplyTradingPairFilter(allPairs);
+
         var universe = new TradingPairUniverseFile(
             UpdatedAt: DateTimeOffset.UtcNow,
-            Pairs: allPairs
+            Pairs: filteredPairs
                 .GroupBy(x => x.TradingPair, StringComparer.OrdinalIgnoreCase)
                 .Select(group => new TradingPairUniverseFileItem(
                     TradingPair: group.Key.ToUpperInvariant(),
@@ -113,6 +118,66 @@ public sealed class TradingPairUniverseRefreshService
             ResolveOutputPath());
 
         return universe;
+    }
+
+    private IReadOnlyList<DiscoveredTradingPair> ApplyTradingPairFilter(
+        IReadOnlyList<DiscoveredTradingPair> pairs)
+    {
+        var evaluated = pairs
+            .Select(pair => new
+            {
+                Pair = pair,
+                Evaluation = _tradingPairFilter.Evaluate(pair.TradingPair)
+            })
+            .ToList();
+
+        var allowed = evaluated
+            .Where(x => x.Evaluation.IsAllowed)
+            .Select(x => x.Pair)
+            .ToList();
+
+        var rejected = evaluated
+            .Where(x => !x.Evaluation.IsAllowed)
+            .ToList();
+
+        if (rejected.Count > 0)
+        {
+            var rejectedUniquePairs = rejected
+                .Select(x => x.Pair.TradingPair.ToUpperInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => x)
+                .ToList();
+
+            var reasonSummary = rejected
+                .GroupBy(x => x.Evaluation.Reason ?? "unknown")
+                .OrderByDescending(x => x.Count())
+                .Select(x => $"{x.Key}={x.Count()}")
+                .ToList();
+
+            _logger.LogInformation(
+                "Trading pair filter applied. Input={Input}, Output={Output}, Rejected={Rejected}, RejectedUniquePairs={RejectedUniquePairs}, Reasons={Reasons}, Sample={Sample}",
+                pairs.Count,
+                allowed.Count,
+                rejected.Count,
+                rejectedUniquePairs.Count,
+                string.Join(", ", reasonSummary),
+                string.Join(", ", rejectedUniquePairs.Take(30)));
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Trading pair filter applied. Input={Input}, Output={Output}, Rejected=0",
+                pairs.Count,
+                allowed.Count);
+        }
+
+        if (allowed.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Trading pair filter removed all discovered pairs. Universe file will not be overwritten.");
+        }
+
+        return allowed;
     }
 
     private async Task WriteUniverseFileAsync(

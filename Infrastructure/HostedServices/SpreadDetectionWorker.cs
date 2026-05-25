@@ -55,11 +55,12 @@ public sealed class SpreadDetectionWorker : BackgroundService
         }
 
         _logger.LogInformation(
-            "Spread detector started. Pairs={Pairs}, IntervalMs={IntervalMs}, MinGrossSpreadPct={MinGrossSpreadPct}, MaxSnapshotAgeMs={MaxSnapshotAgeMs}",
-            tradingPairs.Count,
-            _options.IntervalMs,
-            _options.MinGrossSpreadPct,
-            _options.MaxSnapshotAgeMs);
+                "Spread detector started. Pairs={Pairs}, IntervalMs={IntervalMs}, MinGrossSpreadPct={MinGrossSpreadPct}, MaxGrossSpreadPct={MaxGrossSpreadPct}, MaxSnapshotAgeMs={MaxSnapshotAgeMs}",
+                tradingPairs.Count,
+                _options.IntervalMs,
+                _options.MinGrossSpreadPct,
+                _options.MaxGrossSpreadPct,
+                _options.MaxSnapshotAgeMs);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -69,9 +70,10 @@ public sealed class SpreadDetectionWorker : BackgroundService
                     .Detect(
                         tradingPairs,
                         TimeSpan.FromMilliseconds(_options.MaxSnapshotAgeMs),
-                        _options.MinGrossSpreadPct)
-                    .Take(_options.MaxCandidatesToKeep)
-                    .ToList();
+                        _options.MinGrossSpreadPct,
+                        _options.MaxGrossSpreadPct)
+                        .Take(_options.MaxCandidatesToKeep)
+                        .ToList();
 
                 _store.Set(candidates);
 

@@ -38,6 +38,9 @@ builder.Services.Configure<ValidatedOpportunityOptions>(
 builder.Services.Configure<TradingPairUniverseOptions>(
     builder.Configuration.GetSection(TradingPairUniverseOptions.SectionName));
 
+builder.Services.Configure<TradingPairFilterOptions>(
+    builder.Configuration.GetSection(TradingPairFilterOptions.SectionName));
+
 // -----------------------------------------------------------------------------
 // Trading pair universe discovery / refresh
 // -----------------------------------------------------------------------------
@@ -137,6 +140,7 @@ builder.Services.AddSingleton<ITradingPairDiscoveryClient>(
     serviceProvider =>
         serviceProvider.GetRequiredService<BitgetPerpetualTradingPairDiscoveryClient>());
 
+builder.Services.AddSingleton<TradingPairFilter>();
 builder.Services.AddSingleton<TradingPairUniverseRefreshService>();
 
 // -----------------------------------------------------------------------------

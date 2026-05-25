@@ -14,7 +14,8 @@ public sealed class SpreadDetector
     public IReadOnlyList<SpreadCandidate> Detect(
         IReadOnlyList<string> tradingPairs,
         TimeSpan maxSnapshotAge,
-        decimal minGrossSpreadPct)
+        decimal minGrossSpreadPct,
+        decimal maxGrossSpreadPct)
     {
         var now = DateTimeOffset.UtcNow;
         var result = new List<SpreadCandidate>();
@@ -37,10 +38,17 @@ public sealed class SpreadDetector
             if (cheapestAsk is null || highestBid is null)
                 continue;
 
-            if (cheapestAsk.ConnectorName == highestBid.ConnectorName)
+            if (cheapestAsk.ConnectorName.Equals(
+                    highestBid.ConnectorName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
 
             var grossSpread = highestBid.BestBidPrice - cheapestAsk.BestAskPrice;
+
+            if (grossSpread <= 0)
+                continue;
 
             var grossSpreadPct = cheapestAsk.BestAskPrice > 0
                 ? grossSpread / cheapestAsk.BestAskPrice * 100m
@@ -48,6 +56,12 @@ public sealed class SpreadDetector
 
             if (grossSpreadPct < minGrossSpreadPct)
                 continue;
+
+            if (maxGrossSpreadPct > 0 &&
+                grossSpreadPct > maxGrossSpreadPct)
+            {
+                continue;
+            }
 
             result.Add(new SpreadCandidate(
                 TradingPair: tradingPair,

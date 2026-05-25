@@ -354,9 +354,18 @@ public sealed class DepthCandidateEvaluator
         if (bestPrice <= 0 || averagePrice <= 0)
             return 0m;
 
-        return isBuy
+        var value = isBuy
             ? (averagePrice - bestPrice) / bestPrice * 100m
             : (bestPrice - averagePrice) / bestPrice * 100m;
+
+        return NormalizeTiny(value);
+    }
+
+    private static decimal NormalizeTiny(decimal value)
+    {
+        return Math.Abs(value) < 0.0000000001m
+            ? 0m
+            : value;
     }
 
     private static decimal CalculateGrossSpreadPct(

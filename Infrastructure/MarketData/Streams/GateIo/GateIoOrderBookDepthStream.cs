@@ -211,10 +211,16 @@ public sealed class GateIoOrderBookDepthStream : IOrderBookDepthStream
         if (!string.Equals(dto.Channel, Channel, StringComparison.OrdinalIgnoreCase))
             return;
 
-        if (!string.Equals(dto.Event, "update", StringComparison.OrdinalIgnoreCase))
+        var isOrderBookEvent =
+            string.Equals(dto.Event, "all", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(dto.Event, "update", StringComparison.OrdinalIgnoreCase);
+
+        if (!isOrderBookEvent)
         {
             if (string.Equals(dto.Event, "error", StringComparison.OrdinalIgnoreCase))
+            {
                 _logger.LogWarning("Gate.io depth WS error. Raw={Raw}", json);
+            }
 
             return;
         }
@@ -294,7 +300,7 @@ public sealed class GateIoOrderBookDepthStream : IOrderBookDepthStream
                 payload = new object[]
                 {
                     contract,
-                    "5",
+                    "20",
                     "0"
                 }
             });
@@ -333,12 +339,49 @@ public sealed class GateIoOrderBookDepthStream : IOrderBookDepthStream
         }
     }
 
-    private static OrderBookDepthLevel ParseLevel(
-        GateIoOrderBookLevel level)
+    private static bool TryReadDecimal(
+    JsonElement element,
+    out decimal value)
     {
+        value = 0;
+
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            return element.TryGetDecimal(out value);
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            return decimal.TryParse(
+                element.GetString(),
+                NumberStyles.Number,
+                CultureInfo.InvariantCulture,
+                out value);
+        }
+
+        return false;
+    }
+
+    private static OrderBookDepthLevel ParseLevel(
+    GateIoOrderBookLevel level)
+    {
+        if (!TryReadDecimal(level.Price, out var price))
+        {
+            return new OrderBookDepthLevel(
+                Price: 0,
+                Amount: 0);
+        }
+
+        if (!TryReadDecimal(level.Size, out var size))
+        {
+            return new OrderBookDepthLevel(
+                Price: 0,
+                Amount: 0);
+        }
+
         return new OrderBookDepthLevel(
-            Price: level.Price,
-            Amount: Math.Abs(level.Size));
+            Price: price,
+            Amount: Math.Abs(size));
     }
 
     private static async Task<string?> ReceiveTextAsync(
@@ -394,9 +437,9 @@ public sealed class GateIoOrderBookDepthStream : IOrderBookDepthStream
     private sealed class GateIoOrderBookLevel
     {
         [JsonPropertyName("p")]
-        public decimal Price { get; init; }
+        public JsonElement Price { get; init; }
 
         [JsonPropertyName("s")]
-        public decimal Size { get; init; }
+        public JsonElement Size { get; init; }
     }
 }

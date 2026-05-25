@@ -10,6 +10,8 @@ public sealed class SpreadDetectorOptions
 
     public decimal MinGrossSpreadPct { get; init; } = 0.03m;
 
+    public decimal MaxGrossSpreadPct { get; init; } = 5m;
+
     public int MaxSnapshotAgeMs { get; init; } = 10000;
 
     public int MaxCandidatesToKeep { get; init; } = 100;
