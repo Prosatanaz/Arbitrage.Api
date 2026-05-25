@@ -1,0 +1,6 @@
+@Arbitrage.Api_HostAddress = http://localhost:5277
+
+GET {{Arbitrage.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
