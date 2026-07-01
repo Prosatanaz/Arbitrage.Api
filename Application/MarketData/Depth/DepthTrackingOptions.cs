@@ -13,4 +13,6 @@ public sealed class DepthTrackingOptions
     public int MaxCandidatesToTrack { get; init; } = 20;
 
     public int MaxPairsPerConnector { get; init; } = 40;
+
+    public string[] EnabledConnectors { get; init; } = [];
 }

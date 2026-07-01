@@ -26,11 +26,16 @@ public sealed class OrderBookDepthStreamWorker : BackgroundService
             return;
         }
 
-        var streams = _streams.ToList();
+        var enabledConnectors = _options.EnabledConnectors
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var streams = _streams
+            .Where(x => enabledConnectors.Contains(x.ConnectorName))
+            .ToList();
 
         if (streams.Count == 0)
         {
-            _logger.LogWarning("No order book depth streams were registered.");
+            _logger.LogWarning("No enabled order book depth streams were registered.");
             return;
         }
 

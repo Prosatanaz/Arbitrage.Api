@@ -74,18 +74,15 @@ builder.Services.Configure<ValidatedOpportunityOptions>(
 builder.Services.Configure<TradingPairUniverseOptions>(
     builder.Configuration.GetSection(TradingPairUniverseOptions.SectionName));
 
-builder.Services.Configure<TradingPairFilterOptions>(
-    builder.Configuration.GetSection(TradingPairFilterOptions.SectionName));
-
 builder.Services.Configure<PostgresOptions>(
     builder.Configuration.GetSection(PostgresOptions.SectionName));
 
 builder.Services.Configure<SignalQualityOptions>(
     builder.Configuration.GetSection(SignalQualityOptions.SectionName));
 
-
-
-
+// -----------------------------------------------------------------------------
+// Postgres persistence
+// -----------------------------------------------------------------------------
 
 builder.Services.AddSingleton<PostgresConnectionFactory>();
 
@@ -93,9 +90,9 @@ builder.Services.AddSingleton<IValidatedOpportunityPersistence, PostgresValidate
 
 builder.Services.AddHostedService<PostgresSchemaInitializer>();
 
-
-
-
+// -----------------------------------------------------------------------------
+// Exchange credentials & trading clients
+// -----------------------------------------------------------------------------
 
 
 builder.Services.AddSingleton<ApiSecretProtector>();
@@ -104,7 +101,6 @@ builder.Services.AddSingleton<ExchangeCredentialService>();
 builder.Services.AddSingleton<ExchangeTradingClientRegistry>();
 
 builder.Services.AddHostedService<ExchangeApiCredentialsSchemaInitializer>();
-
 
 builder.Services.Configure<HtxTradingOptions>(
     builder.Configuration.GetSection(HtxTradingOptions.SectionName));
@@ -115,8 +111,6 @@ builder.Services.AddHttpClient<HtxTradingClient>();
 
 builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
     sp.GetRequiredService<HtxTradingClient>());
-
-
 
 builder.Services.Configure<BybitTradingOptions>(
     builder.Configuration.GetSection(BybitTradingOptions.SectionName));
@@ -198,7 +192,9 @@ builder.Services.AddSingleton<MexcContractMetadataStore>();
 builder.Services.AddSingleton<BitMartContractMetadataStore>();
 builder.Services.AddSingleton<HtxContractMetadataStore>();
 
-
+// -----------------------------------------------------------------------------
+// Execution gate (arm/disarm, kill-switch, attempt tracking)
+// -----------------------------------------------------------------------------
 
 builder.Services.Configure<ExecutionOptions>(
     builder.Configuration.GetSection(ExecutionOptions.SectionName));
@@ -208,7 +204,6 @@ builder.Services.AddSingleton<ExecutionGateService>();
 
 builder.Services.AddHostedService<ExecutionSchemaInitializer>();
 builder.Services.AddHostedService<ExecutionStartupSafetyHostedService>();
-
 
 builder.Services.AddHttpClient<BitMartPerpetualTradingPairDiscoveryClient>(
     client =>
@@ -225,7 +220,6 @@ builder.Services.AddHttpClient<MexcPerpetualTradingPairDiscoveryClient>(
     {
         client.Timeout = TimeSpan.FromSeconds(30);
     });
-
 
 builder.Services.AddSingleton<ITradingPairDiscoveryClient>(
     serviceProvider =>
@@ -265,7 +259,6 @@ builder.Services.AddSingleton<ITradingPairDiscoveryClient>(
     serviceProvider =>
     serviceProvider.GetRequiredService<BingXPerpetualTradingPairDiscoveryClient>());
 
-builder.Services.AddSingleton<TradingPairFilter>();
 builder.Services.AddSingleton<TradingPairUniverseRefreshService>();
 
 // -----------------------------------------------------------------------------
@@ -355,48 +348,6 @@ builder.Services
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-
-// -----------------------------------------------------------------------------
-// Diagnostics before build
-// -----------------------------------------------------------------------------
-
-var bboStreamRegistrations = builder.Services
-    .Where(x => x.ServiceType == typeof(IBestBidAskStream))
-    .Select(x => x.ImplementationType?.FullName ?? "<unknown>")
-    .ToList();
-
-Console.WriteLine("Registered IBestBidAskStream implementations:");
-
-foreach (var registration in bboStreamRegistrations)
-{
-    Console.WriteLine($" - {registration}");
-}
-
-var depthStreamRegistrations = builder.Services
-    .Where(x => x.ServiceType == typeof(IOrderBookDepthStream))
-    .Select(x => x.ImplementationType?.FullName ?? "<unknown>")
-    .ToList();
-
-Console.WriteLine("Registered IOrderBookDepthStream implementations:");
-
-foreach (var registration in depthStreamRegistrations)
-{
-    Console.WriteLine($" - {registration}");
-}
-
-var universeDiscoveryRegistrations = builder.Services
-    .Where(x => x.ServiceType == typeof(ITradingPairDiscoveryClient))
-    .Select(x => x.ImplementationFactory is not null
-        ? "<factory registration>"
-        : x.ImplementationType?.FullName ?? "<unknown>")
-    .ToList();
-
-Console.WriteLine("Registered ITradingPairDiscoveryClient implementations:");
-
-foreach (var registration in universeDiscoveryRegistrations)
-{
-    Console.WriteLine($" - {registration}");
-}
 
 // -----------------------------------------------------------------------------
 // App pipeline
