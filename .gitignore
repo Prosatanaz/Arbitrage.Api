@@ -1,6 +1,13 @@
-bin/
-obj/
-.vs/
-*.user
-*.suo
-*.log
+# secrets / keys
+Data/protection-keys/
+*credential*.json
+.env
+.env.*
+appsettings.*.Local.json
+*.pfx
+*.p12
+*.pem
+*.key
+
+# git history purge backup
+backup-before-purge.git/

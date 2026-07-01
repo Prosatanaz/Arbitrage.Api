@@ -35,7 +35,10 @@ var dataProtectionApplicationName =
 
 var dataProtectionKeysPath =
     builder.Configuration["DataProtection:KeysPath"]
-    ?? "Data/protection-keys";
+    ?? Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Arbitrage.Api",
+        "protection-keys");
 
 var resolvedDataProtectionKeysPath = Path.IsPathRooted(dataProtectionKeysPath)
     ? dataProtectionKeysPath
