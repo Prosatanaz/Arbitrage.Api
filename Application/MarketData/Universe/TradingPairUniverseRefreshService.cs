@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using Arbitrage.Api.Application.Instruments;
 using Microsoft.Extensions.Options;
 
 namespace Arbitrage.Api.Application.MarketData.Universe;
@@ -14,20 +15,20 @@ public sealed class TradingPairUniverseRefreshService
     private readonly IEnumerable<ITradingPairDiscoveryClient> _clients;
     private readonly TradingPairUniverseOptions _options;
     private readonly IHostEnvironment _environment;
-    private readonly TradingPairFilter _tradingPairFilter;
+    private readonly InstrumentFilterService _instrumentFilter;
     private readonly ILogger<TradingPairUniverseRefreshService> _logger;
 
     public TradingPairUniverseRefreshService(
         IEnumerable<ITradingPairDiscoveryClient> clients,
         IOptions<TradingPairUniverseOptions> options,
         IHostEnvironment environment,
-        TradingPairFilter tradingPairFilter,
+        InstrumentFilterService instrumentFilter,
         ILogger<TradingPairUniverseRefreshService> logger)
     {
         _clients = clients;
         _options = options.Value;
         _environment = environment;
-        _tradingPairFilter = tradingPairFilter;
+        _instrumentFilter = instrumentFilter;
         _logger = logger;
     }
 
@@ -48,7 +49,9 @@ public sealed class TradingPairUniverseRefreshService
         }
 
         var allPairs = new List<DiscoveredTradingPair>();
-        var successCount = 0;
+        var succeededConnectors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var failedConnectors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var zeroPairConnectors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var client in clients)
         {
@@ -60,6 +63,8 @@ public sealed class TradingPairUniverseRefreshService
 
                 if (pairs.Count == 0)
                 {
+                    zeroPairConnectors.Add(client.ConnectorName);
+
                     _logger.LogWarning(
                         "Trading pair discovery returned zero pairs. Connector={Connector}",
                         client.ConnectorName);
@@ -68,7 +73,7 @@ public sealed class TradingPairUniverseRefreshService
                 }
 
                 allPairs.AddRange(pairs);
-                successCount++;
+                succeededConnectors.Add(client.ConnectorName);
 
                 _logger.LogInformation(
                     "Discovered trading pairs. Connector={Connector}, Count={Count}",
@@ -81,6 +86,8 @@ public sealed class TradingPairUniverseRefreshService
             }
             catch (Exception ex)
             {
+                failedConnectors.Add(client.ConnectorName);
+
                 _logger.LogWarning(
                     ex,
                     "Trading pair discovery failed. Connector={Connector}",
@@ -88,13 +95,64 @@ public sealed class TradingPairUniverseRefreshService
             }
         }
 
-        if (successCount == 0 || allPairs.Count == 0)
+        if (succeededConnectors.Count == 0 || allPairs.Count == 0)
         {
             throw new InvalidOperationException(
                 "Trading pair discovery failed for all enabled connectors. Existing universe file will not be overwritten.");
         }
 
-        var filteredPairs = ApplyTradingPairFilter(allPairs);
+        if (_options.RequireAllEnabledConnectors)
+        {
+            var missingConnectors = enabledConnectors
+                .Except(succeededConnectors, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (missingConnectors.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Trading pair discovery did not succeed for all enabled connectors. Missing={string.Join(", ", missingConnectors)}");
+            }
+        }
+
+        if (_options.TreatZeroPairsAsFailure && zeroPairConnectors.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Trading pair discovery returned zero pairs for connectors. Connectors={string.Join(", ", zeroPairConnectors)}");
+        }
+
+        var filteredPairs = new List<DiscoveredTradingPair>();
+        var blockedByReason = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pair in allPairs)
+        {
+            var result = _instrumentFilter.EvaluateTradingPair(pair.TradingPair);
+
+            if (result.Decision == InstrumentFilterDecision.Allowed)
+            {
+                filteredPairs.Add(new DiscoveredTradingPair(
+                    result.TradingPair,
+                    pair.ConnectorName));
+
+                continue;
+            }
+
+            blockedByReason.TryGetValue(result.Reason, out var count);
+            blockedByReason[result.Reason] = count + 1;
+        }
+
+        if (filteredPairs.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Instrument filter removed all discovered trading pairs. Existing universe file will not be overwritten.");
+        }
+
+        foreach (var item in blockedByReason.OrderByDescending(x => x.Value))
+        {
+            _logger.LogInformation(
+                "Trading pair universe filter blocked pairs. Reason={Reason}, Count={Count}",
+                item.Key,
+                item.Value);
+        }
 
         var universe = new TradingPairUniverseFile(
             UpdatedAt: DateTimeOffset.UtcNow,
@@ -113,71 +171,14 @@ public sealed class TradingPairUniverseRefreshService
         await WriteUniverseFileAsync(universe, ct);
 
         _logger.LogInformation(
-            "Trading pair universe file refreshed. Pairs={Pairs}, Path={Path}",
+            "Trading pair universe file refreshed. RawPairs={RawPairs}, FilteredPairs={FilteredPairs}, OutputPairs={OutputPairs}, SucceededConnectors={SucceededConnectors}, Path={Path}",
+            allPairs.Count,
+            filteredPairs.Count,
             universe.Pairs.Count,
+            string.Join(", ", succeededConnectors.OrderBy(x => x)),
             ResolveOutputPath());
 
         return universe;
-    }
-
-    private IReadOnlyList<DiscoveredTradingPair> ApplyTradingPairFilter(
-        IReadOnlyList<DiscoveredTradingPair> pairs)
-    {
-        var evaluated = pairs
-            .Select(pair => new
-            {
-                Pair = pair,
-                Evaluation = _tradingPairFilter.Evaluate(pair.TradingPair)
-            })
-            .ToList();
-
-        var allowed = evaluated
-            .Where(x => x.Evaluation.IsAllowed)
-            .Select(x => x.Pair)
-            .ToList();
-
-        var rejected = evaluated
-            .Where(x => !x.Evaluation.IsAllowed)
-            .ToList();
-
-        if (rejected.Count > 0)
-        {
-            var rejectedUniquePairs = rejected
-                .Select(x => x.Pair.TradingPair.ToUpperInvariant())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(x => x)
-                .ToList();
-
-            var reasonSummary = rejected
-                .GroupBy(x => x.Evaluation.Reason ?? "unknown")
-                .OrderByDescending(x => x.Count())
-                .Select(x => $"{x.Key}={x.Count()}")
-                .ToList();
-
-            _logger.LogInformation(
-                "Trading pair filter applied. Input={Input}, Output={Output}, Rejected={Rejected}, RejectedUniquePairs={RejectedUniquePairs}, Reasons={Reasons}, Sample={Sample}",
-                pairs.Count,
-                allowed.Count,
-                rejected.Count,
-                rejectedUniquePairs.Count,
-                string.Join(", ", reasonSummary),
-                string.Join(", ", rejectedUniquePairs.Take(30)));
-        }
-        else
-        {
-            _logger.LogInformation(
-                "Trading pair filter applied. Input={Input}, Output={Output}, Rejected=0",
-                pairs.Count,
-                allowed.Count);
-        }
-
-        if (allowed.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Trading pair filter removed all discovered pairs. Universe file will not be overwritten.");
-        }
-
-        return allowed;
     }
 
     private async Task WriteUniverseFileAsync(

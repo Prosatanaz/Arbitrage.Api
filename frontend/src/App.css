@@ -1,0 +1,354 @@
+﻿import {
+    useEffect, useMemo, useState
+}
+
+from 'react';
+import {
+    api
+}
+
+from './api/client';
+import type {
+    ActiveSignalsResponse, ActiveSignalsSummaryResponse, AnalyticsSummaryResponse, DepthIssueItem, SystemHealthResponse, TopOpportunityItem,
+}
+
+from './api/types';
+import {
+    StatCard
+}
+
+from './components/StatCard';
+import './styles.css';
+
+type DashboardState = {
+    health: SystemHealthResponse | null;
+    signalsSummary: ActiveSignalsSummaryResponse | null;
+    activeSignals: ActiveSignalsResponse | null;
+    analyticsSummary: AnalyticsSummaryResponse | null;
+    topOpportunities: TopOpportunityItem[];
+    depthIssues: DepthIssueItem[];
+}
+
+;
+
+function formatNumber(value: number | null | undefined, digits = 2): string {
+    if (value === null || value === undefined || Number.isNaN(value))
+
+{
+    return '—';
+}
+
+return value.toFixed(digits);
+}
+
+function formatUsd(value: number | null | undefined): string {
+    if (value === null || value === undefined || Number.isNaN(value))
+
+{
+    return '—';
+}
+
+return `$ {
+    value .toFixed(2)
+}
+
+USDT`;
+}
+
+function formatPct(value: number | null | undefined): string {
+    if (value === null || value === undefined || Number.isNaN(value))
+
+{
+    return '—';
+}
+
+return `$ {
+    value .toFixed(3)
+}
+
+%`;
+}
+
+function formatAge(ms: number | null | undefined): string {
+    if (ms === null || ms === undefined || Number.isNaN(ms))
+
+{
+    return '—';
+}
+
+if (ms < 1000) {
+    return `$
+
+{
+    Math .round(ms)
+}
+
+ms`;
+}
+
+return `$ {
+    (ms / 1000).toFixed(1)
+}
+
+s`;
+}
+
+function App() {
+    const [state, setState] = useState<DashboardState>({
+    health: null,
+    signalsSummary: null,
+    activeSignals: null,
+    analyticsSummary: null,
+    topOpportunities: [],
+    depthIssues: [],
+  });
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [lastRefreshAt, setLastRefreshAt] = useState<Date | null>(null);
+    async function refresh()
+
+{
+    try
+
+{
+    setError(null);
+    const [
+        health,
+        signalsSummary,
+        activeSignals,
+        analyticsSummary,
+        topOpportunities,
+        depthIssues,
+      ] = await Promise.all([
+        api.systemHealth(),
+        api.activeSignalsSummary(),
+        api.activeSignals(),
+        api.analyticsSummary(12),
+        api.topOpportunities(12, 10),
+        api.depthIssues(12, 10),
+      ]);
+    setState({
+        health,
+        signalsSummary,
+        activeSignals,
+        analyticsSummary,
+        topOpportunities,
+        depthIssues,
+      });
+    setLastRefreshAt(new Date());
+}
+
+catch (err) {
+    setError(err instanceof Error ? err.message : 'Unknown error');
+}
+
+finally {
+    setLoading(false);
+}
+
+}
+
+useEffect(() => {
+    refresh();
+
+    const timer = window.setInterval(refresh, 5000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+const healthTone = useMemo(() => {
+    if (!state.health) return 'warn';
+    return state.health.status === 'Healthy' ? 'good' : 'bad';
+  }, [state.health]);
+
+return (
+    <main className="app-shell">
+      <header className="app-header">
+        <div>
+          <h1>Arbitrage Dashboard</h1>
+          <p>Live scanner status, signal quality and 12h opportunity analytics.</p>
+        </div>
+
+        <div className="header-actions">
+          <button onClick={refresh} disabled={loading}>
+            {loading ? 'Loading...' : 'Refresh'}
+          </button>
+          <span className="last-refresh">
+            {lastRefreshAt ? `Updated ${lastRefreshAt.toLocaleTimeString()}` : 'Not loaded'}
+          </span>
+        </div>
+      </header>
+
+      {error && (
+        <section className="error-box">
+          <strong>Request failed:</strong> {error}
+        </section>
+      )}
+
+      <section className="grid grid--cards">
+        <StatCard
+          title="System status"
+          value={state.health?.status ?? '—'}
+          subtitle={`${state.health?.degradedConnectors?.length ?? 0} degraded connectors`}
+          tone={healthTone}
+        />
+
+        <StatCard
+          title="Active alerts"
+          value={state.signalsSummary?.alerts ?? '—'}
+          subtitle={`${state.signalsSummary?.candidates ?? 0} candidates`}
+          tone={(state.signalsSummary?.alerts ?? 0) > 0 ? 'warn' : 'default'}
+        />
+
+        <StatCard
+          title="12h conservative PnL"
+          value={formatUsd(state.analyticsSummary?.totalConservativeProfitUsd)}
+          subtitle={`${state.analyticsSummary?.tradesCount ?? 0} modelled trades`}
+          tone="good"
+        />
+
+        <StatCard
+          title="12h avg entry edge"
+          value={formatPct(state.analyticsSummary?.avgEntryEdgePct)}
+          subtitle={`max ${formatPct(state.analyticsSummary?.maxEntryEdgePct)}`}
+        />
+
+        <StatCard
+          title="BBO snapshots"
+          value={state.health?.bbo?.totalSnapshots ?? '—'}
+          subtitle={`${state.health?.bbo?.freshCount ?? 0} fresh`}
+        />
+
+        <StatCard
+          title="Depth cache"
+          value={state.health?.depth?.totalCachedSnapshots ?? '—'}
+          subtitle={`${state.health?.depth?.totalTargets ?? 0} targets`}
+        />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Active signals</h2>
+          <span>{state.activeSignals?.count ?? 0} rows</span>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Pair</th>
+                <th>Direction</th>
+                <th>Decision</th>
+                <th>Net edge</th>
+                <th>Profit</th>
+                <th>Slippage</th>
+                <th>Age</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(state.activeSignals?.items ?? []).map((item) => (
+                <tr key={`${item.tradingPair}-${item.longConnector}-${item.shortConnector}`}>
+                  <td>{item.tradingPair}</td>
+                  <td>
+                    <span className="muted">{item.longConnector}</span>
+                    <span> → </span>
+                    <span className="muted">{item.shortConnector}</span>
+                  </td>
+                  <td>
+                    <span className={`badge badge--${item.decision.toLowerCase()}`}>
+                      {item.decision}
+                    </span>
+                  </td>
+                  <td>{formatPct(item.netEdgePct)}</td>
+                  <td>{formatUsd(item.estimatedProfitUsd)}</td>
+                  <td>
+                    {formatPct(item.buySlippagePct)} / {formatPct(item.sellSlippagePct)}
+                  </td>
+                  <td>{formatAge(item.signalAgeMs)}</td>
+                  <td className="muted">{item.decisionReason}</td>
+                </tr>
+              ))}
+
+              {(state.activeSignals?.items.length ?? 0) === 0 && (
+                <tr>
+                  <td colSpan={8} className="empty-cell">
+                    No active signal candidates right now.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="two-column">
+        <section className="panel">
+          <div className="panel-header">
+            <h2>Top opportunities, 12h</h2>
+            <span>by conservative PnL</span>
+          </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Pair</th>
+                  <th>Direction</th>
+                  <th>Trades</th>
+                  <th>Conservative PnL</th>
+                  <th>Avg edge</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.topOpportunities.map((item) => (
+                  <tr key={`${item.tradingPair}-${item.longConnector}-${item.shortConnector}`}>
+                    <td>{item.tradingPair}</td>
+                    <td>
+                      <span className="muted">{item.longConnector}</span>
+                      <span> → </span>
+                      <span className="muted">{item.shortConnector}</span>
+                    </td>
+                    <td>{item.trades}</td>
+                    <td>{formatUsd(item.conservativeProfitUsd)}</td>
+                    <td>{formatPct(item.avgEntryEdgePct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <h2>Depth issues, 12h</h2>
+            <span>top connectors</span>
+          </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Connector</th>
+                  <th>Status</th>
+                  <th>Rows</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.depthIssues.map((item) => (
+                  <tr key={`${item.problematicConnector}-${item.status}`}>
+                    <td>{item.problematicConnector}</td>
+                    <td>{item.status}</td>
+                    <td>{item.rows}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+  );
+}
+
+export default App;

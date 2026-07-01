@@ -92,7 +92,6 @@ public sealed class MarketDataStreamingController : ControllerBase
                 x.ExchangeTimestamp,
                 x.ReceivedAt
             })
-            .OrderBy(x => x.ConnectorName)
-            .ToList();
+            .OrderBy(x => x.ConnectorName);
     }
 }

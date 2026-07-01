@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: arbitrage-postgres
+    environment:
+      POSTGRES_DB: arbitrage
+      POSTGRES_USER: arbitrage
+      POSTGRES_PASSWORD: arbitrage
+    ports:
+      - "5432:5432"
+    volumes:
+      - arbitrage_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  arbitrage_postgres_data:

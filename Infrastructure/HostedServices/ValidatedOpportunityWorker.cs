@@ -1,24 +1,28 @@
 ﻿using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Application.MarketData.Opportunities;
+using Arbitrage.Api.Application.Persistence;
 using Microsoft.Extensions.Options;
 
 namespace Arbitrage.Api.Infrastructure.HostedServices;
 
 public sealed class ValidatedOpportunityWorker : BackgroundService
 {
-    private readonly DepthCandidateEvaluator _evaluator;
+    private readonly DepthCandidateEvaluator _depthCandidateEvaluator;
     private readonly LatestValidatedOpportunityStore _store;
+    private readonly IValidatedOpportunityPersistence _persistence;
     private readonly ValidatedOpportunityOptions _options;
     private readonly ILogger<ValidatedOpportunityWorker> _logger;
 
     public ValidatedOpportunityWorker(
-        DepthCandidateEvaluator evaluator,
+        DepthCandidateEvaluator depthCandidateEvaluator,
         LatestValidatedOpportunityStore store,
+        IValidatedOpportunityPersistence persistence,
         IOptions<ValidatedOpportunityOptions> options,
         ILogger<ValidatedOpportunityWorker> logger)
     {
-        _evaluator = evaluator;
+        _depthCandidateEvaluator = depthCandidateEvaluator;
         _store = store;
+        _persistence = persistence;
         _options = options.Value;
         _logger = logger;
     }
@@ -41,28 +45,47 @@ public sealed class ValidatedOpportunityWorker : BackgroundService
         {
             try
             {
-                var request = BuildRequest();
+                var request = new EvaluateDepthCandidatesRequest
+                {
+                    MaxCandidates = _options.MaxCandidates,
+                    NotionalUsd = _options.NotionalUsd,
+                    MinNetEdgePct = _options.MinNetEdgePct,
+                    MaxDepthAgeMs = _options.MaxDepthAgeMs,
+                    MinCandidateAgeMs = _options.MinCandidateAgeMs,
+                    DefaultTakerFeePct = _options.DefaultTakerFeePct,
+                    CloseFeeBufferPct = _options.CloseFeeBufferPct,
+                    SafetyBufferPct = _options.SafetyBufferPct,
+                    TakerFeesPct = _options.TakerFeesPct
+                };
 
-                var evaluation = _evaluator.EvaluateCurrent(request);
+                var evaluation = _depthCandidateEvaluator.EvaluateCurrent(request);
 
-                var items = FilterItems(evaluation.Items)
-                    .OrderByDescending(x => x.NetEdgePct ?? decimal.MinValue)
+                var items = evaluation.Items
+                    .Take(_options.MaxCandidates)
                     .ToList();
 
                 _store.Set(
-                    evaluation: evaluation,
-                    items: items);
+                    evaluation,
+                    items);
+
+                await _persistence.SaveAsync(
+                    evaluation.EvaluatedAt,
+                    items,
+                    stoppingToken);
 
                 if (items.Count > 0)
                 {
-                    var best = items.First();
+                    var best = items
+                        .OrderByDescending(x => x.NetEdgePct ?? decimal.MinValue)
+                        .First();
 
                     _logger.LogInformation(
-                        "Validated opportunities updated. Items={Items}, Valid={Valid}, NetBelowMin={NetBelowMin}, MissingDepth={MissingDepth}, Best={BestPair} {BestStatus} {BestNetEdgePct}%",
+                        "Validated opportunities updated. Items={Items}, Valid={Valid}, NetBelowMin={NetBelowMin}, MissingDepth={MissingDepth}, NotFillable={NotFillable}, Best={BestPair} {BestStatus} {BestNetEdgePct}%",
                         items.Count,
                         evaluation.ValidCount,
                         evaluation.NetEdgeBelowMinimumCount,
                         evaluation.MissingDepthCount,
+                        evaluation.NotFillableCount,
                         best.Candidate.TradingPair,
                         best.Status,
                         best.NetEdgePct);
@@ -70,9 +93,11 @@ public sealed class ValidatedOpportunityWorker : BackgroundService
                 else
                 {
                     _logger.LogDebug(
-                        "Validated opportunities are empty. CandidatesChecked={CandidatesChecked}, MissingDepth={MissingDepth}",
-                        evaluation.CandidatesChecked,
-                        evaluation.MissingDepthCount);
+                        "No validated opportunities produced. CandidatesAvailable={CandidatesAvailable}, CandidatesMatured={CandidatesMatured}, CandidatesTargeted={CandidatesTargeted}, CandidatesChecked={CandidatesChecked}",
+                        evaluation.CandidatesAvailable,
+                        evaluation.CandidatesMatured,
+                        evaluation.CandidatesTargeted,
+                        evaluation.CandidatesChecked);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -83,62 +108,10 @@ public sealed class ValidatedOpportunityWorker : BackgroundService
             {
                 _logger.LogWarning(
                     ex,
-                    "Validated opportunity update failed.");
+                    "Validated opportunity iteration failed.");
             }
 
             await Task.Delay(_options.IntervalMs, stoppingToken);
-        }
-    }
-
-    private EvaluateDepthCandidatesRequest BuildRequest()
-    {
-        return new EvaluateDepthCandidatesRequest
-        {
-            MaxCandidates = _options.MaxCandidates,
-            NotionalUsd = _options.NotionalUsd,
-            MinNetEdgePct = _options.MinNetEdgePct,
-            MaxDepthAgeMs = _options.MaxDepthAgeMs,
-            MinCandidateAgeMs = _options.MinCandidateAgeMs,
-            DefaultTakerFeePct = _options.DefaultTakerFeePct,
-            CloseFeeBufferPct = _options.CloseFeeBufferPct,
-            SafetyBufferPct = _options.SafetyBufferPct,
-            TakerFeesPct = _options.TakerFeesPct
-        };
-    }
-
-    private IEnumerable<ValidatedDepthCandidate> FilterItems(
-        IReadOnlyList<ValidatedDepthCandidate> items)
-    {
-        foreach (var item in items)
-        {
-            if (item.Status == DepthCandidateValidationStatus.Valid)
-            {
-                yield return item;
-                continue;
-            }
-
-            if (_options.IncludeNetEdgeBelowMinimum &&
-                item.Status == DepthCandidateValidationStatus.NetEdgeBelowMinimum)
-            {
-                yield return item;
-                continue;
-            }
-
-            if (_options.IncludeNotFullyFillable &&
-                item.Status == DepthCandidateValidationStatus.NotFullyFillable)
-            {
-                yield return item;
-                continue;
-            }
-
-            if (_options.IncludeMissingDepth &&
-                item.Status is DepthCandidateValidationStatus.MissingBuyDepth
-                    or DepthCandidateValidationStatus.MissingSellDepth
-                    or DepthCandidateValidationStatus.StaleBuyDepth
-                    or DepthCandidateValidationStatus.StaleSellDepth)
-            {
-                yield return item;
-            }
         }
     }
 }

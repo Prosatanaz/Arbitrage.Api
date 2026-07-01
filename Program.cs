@@ -1,21 +1,54 @@
 using System.Text.Json.Serialization;
+using Arbitrage.Api.Application.Execution;
+using Arbitrage.Api.Application.Execution.Credentials;
+using Arbitrage.Api.Application.Execution.Trading;
+using Arbitrage.Api.Application.Instruments;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Application.MarketData.Opportunities;
 using Arbitrage.Api.Application.MarketData.Streaming;
 using Arbitrage.Api.Application.MarketData.Universe;
+using Arbitrage.Api.Application.Persistence;
+using Arbitrage.Api.Application.SignalQuality;
+using Arbitrage.Api.Infrastructure.Execution.Trading.Bybit;
+using Arbitrage.Api.Infrastructure.Execution.Trading.Htx;
 using Arbitrage.Api.Infrastructure.HostedServices;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.Binance;
+using Arbitrage.Api.Infrastructure.MarketData.Streams.BingX;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.Bitget;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.BitMart;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.Bybit;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.GateIo;
+using Arbitrage.Api.Infrastructure.MarketData.Streams.Htx;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.KuCoin;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.Mexc;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.Okx;
 using Arbitrage.Api.Infrastructure.MarketData.Universe;
+using Arbitrage.Api.Infrastructure.Persistence.Postgres;
 using Arbitrage.Api.Infrastructure.Univerce;
+using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var dataProtectionApplicationName =
+    builder.Configuration["DataProtection:ApplicationName"]
+    ?? "Arbitrage.Api";
+
+var dataProtectionKeysPath =
+    builder.Configuration["DataProtection:KeysPath"]
+    ?? "Data/protection-keys";
+
+var resolvedDataProtectionKeysPath = Path.IsPathRooted(dataProtectionKeysPath)
+    ? dataProtectionKeysPath
+    : Path.Combine(
+        builder.Environment.ContentRootPath,
+        dataProtectionKeysPath);
+
+Directory.CreateDirectory(resolvedDataProtectionKeysPath);
+
+builder.Services
+    .AddDataProtection()
+    .SetApplicationName(dataProtectionApplicationName)
+    .PersistKeysToFileSystem(new DirectoryInfo(resolvedDataProtectionKeysPath));
 
 builder.Logging.AddConsole();
 
@@ -40,6 +73,57 @@ builder.Services.Configure<TradingPairUniverseOptions>(
 
 builder.Services.Configure<TradingPairFilterOptions>(
     builder.Configuration.GetSection(TradingPairFilterOptions.SectionName));
+
+builder.Services.Configure<PostgresOptions>(
+    builder.Configuration.GetSection(PostgresOptions.SectionName));
+
+builder.Services.Configure<SignalQualityOptions>(
+    builder.Configuration.GetSection(SignalQualityOptions.SectionName));
+
+
+
+
+
+builder.Services.AddSingleton<PostgresConnectionFactory>();
+
+builder.Services.AddSingleton<IValidatedOpportunityPersistence, PostgresValidatedOpportunityPersistence>();
+
+builder.Services.AddHostedService<PostgresSchemaInitializer>();
+
+
+
+
+
+
+builder.Services.AddSingleton<ApiSecretProtector>();
+builder.Services.AddSingleton<IExchangeApiCredentialsRepository, PostgresExchangeApiCredentialsRepository>();
+builder.Services.AddSingleton<ExchangeCredentialService>();
+builder.Services.AddSingleton<ExchangeTradingClientRegistry>();
+
+builder.Services.AddHostedService<ExchangeApiCredentialsSchemaInitializer>();
+
+
+builder.Services.Configure<HtxTradingOptions>(
+    builder.Configuration.GetSection(HtxTradingOptions.SectionName));
+
+builder.Services.AddSingleton<HtxAuthSigner>();
+
+builder.Services.AddHttpClient<HtxTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<HtxTradingClient>());
+
+
+
+builder.Services.Configure<BybitTradingOptions>(
+    builder.Configuration.GetSection(BybitTradingOptions.SectionName));
+
+builder.Services.AddSingleton<BybitAuthSigner>();
+
+builder.Services.AddHttpClient<BybitTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<BybitTradingClient>());
 
 // -----------------------------------------------------------------------------
 // Trading pair universe discovery / refresh
@@ -90,8 +174,38 @@ builder.Services.AddHttpClient<KuCoinPerpetualTradingPairDiscoveryClient>(
     {
         client.Timeout = TimeSpan.FromSeconds(30);
     });
+builder.Services.AddHttpClient<HtxPerpetualTradingPairDiscoveryClient>(client =>
+{
+    client.BaseAddress = new Uri("https://api.hbdm.com");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddHttpClient<BingXPerpetualTradingPairDiscoveryClient>(client =>
+{
+    client.BaseAddress = new Uri("https://open-api.bingx.com");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
+builder.Services.AddSingleton<SignalQualityService>();
+builder.Services.Configure<InstrumentFilterOptions>(
+    builder.Configuration.GetSection(InstrumentFilterOptions.SectionName));
+
+builder.Services.AddSingleton<InstrumentFilterService>();
+
 builder.Services.AddSingleton<MexcContractMetadataStore>();
 builder.Services.AddSingleton<BitMartContractMetadataStore>();
+builder.Services.AddSingleton<HtxContractMetadataStore>();
+
+
+
+builder.Services.Configure<ExecutionOptions>(
+    builder.Configuration.GetSection(ExecutionOptions.SectionName));
+
+builder.Services.AddSingleton<IExecutionRuntimeStateRepository, PostgresExecutionRuntimeStateRepository>();
+builder.Services.AddSingleton<ExecutionGateService>();
+
+builder.Services.AddHostedService<ExecutionSchemaInitializer>();
+builder.Services.AddHostedService<ExecutionStartupSafetyHostedService>();
+
 
 builder.Services.AddHttpClient<BitMartPerpetualTradingPairDiscoveryClient>(
     client =>
@@ -140,6 +254,14 @@ builder.Services.AddSingleton<ITradingPairDiscoveryClient>(
     serviceProvider =>
         serviceProvider.GetRequiredService<BitgetPerpetualTradingPairDiscoveryClient>());
 
+builder.Services.AddSingleton<ITradingPairDiscoveryClient>(
+    serviceProvider =>
+    serviceProvider.GetRequiredService<HtxPerpetualTradingPairDiscoveryClient>());
+
+builder.Services.AddSingleton<ITradingPairDiscoveryClient>(
+    serviceProvider =>
+    serviceProvider.GetRequiredService<BingXPerpetualTradingPairDiscoveryClient>());
+
 builder.Services.AddSingleton<TradingPairFilter>();
 builder.Services.AddSingleton<TradingPairUniverseRefreshService>();
 
@@ -165,7 +287,8 @@ builder.Services.AddSingleton<IBestBidAskStream, GateIoBboStream>();
 builder.Services.AddSingleton<IBestBidAskStream, KuCoinBboStream>();
 builder.Services.AddSingleton<IBestBidAskStream, MexcBboStream>();
 builder.Services.AddSingleton<IBestBidAskStream, BitMartBboStream>();
-
+builder.Services.AddSingleton<IBestBidAskStream, HtxBboStream>();
+builder.Services.AddSingleton<IBestBidAskStream, BingXBboStream>();
 // -----------------------------------------------------------------------------
 // Depth tracking / validation
 // -----------------------------------------------------------------------------
@@ -184,6 +307,8 @@ builder.Services.AddSingleton<IOrderBookDepthStream, GateIoOrderBookDepthStream>
 builder.Services.AddSingleton<IOrderBookDepthStream, KuCoinOrderBookDepthStream>();
 builder.Services.AddSingleton<IOrderBookDepthStream, MexcOrderBookDepthStream>();
 builder.Services.AddSingleton<IOrderBookDepthStream, BitMartOrderBookDepthStream>();
+builder.Services.AddSingleton<IOrderBookDepthStream, BingXOrderBookDepthStream>();
+builder.Services.AddSingleton<IOrderBookDepthStream, HtxOrderBookDepthStream>();
 
 // -----------------------------------------------------------------------------
 // Validated opportunities

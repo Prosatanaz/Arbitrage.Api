@@ -14,6 +14,10 @@ public sealed class TradingPairUniverseOptions
 
     public string QuoteAsset { get; init; } = "USDT";
 
+    public bool RequireAllEnabledConnectors { get; init; } = true;
+
+    public bool TreatZeroPairsAsFailure { get; init; } = true;
+
     public string[] EnabledConnectors { get; init; } =
     [
         "binance_perpetual",
