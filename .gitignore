@@ -11,3 +11,9 @@ appsettings.*.Local.json
 
 # git history purge backup
 backup-before-purge.git/
+
+# build output
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user

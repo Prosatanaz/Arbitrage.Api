@@ -131,6 +131,8 @@ public sealed class HtxTradingClient : IExchangeTradingClient
         return Task.FromResult(result);
     }
 
+    // PlaceOrderAsync is intentionally not implemented yet. When added, round price/qty
+    // via OrderSizeRounding using these rules and attach client_order_id for retry idempotency.
     public async Task<ExchangeSymbolRules?> GetSymbolRulesAsync(
         string tradingPair,
         CancellationToken ct)

@@ -118,6 +118,8 @@ public sealed class BybitTradingClient : IExchangeTradingClient
         return Task.FromResult(result);
     }
 
+    // PlaceOrderAsync is intentionally not implemented yet. When added, round price/qty
+    // via OrderSizeRounding using these rules and attach orderLinkId for retry idempotency.
     public async Task<ExchangeSymbolRules?> GetSymbolRulesAsync(
         string tradingPair,
         CancellationToken ct)
