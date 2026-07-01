@@ -18,7 +18,7 @@ public class BinanceBboStreamTests
         {
             var cache = new BestBidAskCache();
             var stream = new BinanceBboStream(cache, NullLogger<BinanceBboStream>.Instance);
-            stream._allowedSymbols.Add("BTCUSDT");
+            stream.AllowedSymbols.Add("BTCUSDT");
 
             const string json = """
                 {"s":"BTCUSDT","b":"64123.45","B":"1.230","a":"64124.10","A":"0.870"}

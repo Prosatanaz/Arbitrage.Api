@@ -1,84 +1,51 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Arbitrage.Api.Application.MarketData.Streaming;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.Binance;
 
-public sealed class BinanceBboStream : IBestBidAskStream
+public sealed class BinanceBboStream : BboStreamBase
 {
     private const string Connector = "binance_perpetual";
-    private const string WsUrl = "wss://fstream.binance.com/ws/!bookTicker";
 
     private readonly BestBidAskCache _cache;
-    private readonly ILogger<BinanceBboStream> _logger;
-
-    internal HashSet<string> _allowedSymbols = new(StringComparer.OrdinalIgnoreCase);
-
-    public string ConnectorName => Connector;
 
     public BinanceBboStream(
         BestBidAskCache cache,
         ILogger<BinanceBboStream> logger)
+        : base(logger)
     {
         _cache = cache;
-        _logger = logger;
     }
 
-    public async Task StartAsync(
-        IReadOnlyList<string> tradingPairs,
+    public override string ConnectorName => Connector;
+
+    protected override string WsUrl => "wss://fstream.binance.com/ws/!bookTicker";
+
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        BinanceSymbolMapper.ToBinanceSymbol(tradingPair);
+
+    protected override Task SubscribeAsync(
+        ClientWebSocket socket,
+        IReadOnlyList<string> symbols,
         CancellationToken ct)
     {
-        _allowedSymbols = tradingPairs
-            .Select(BinanceSymbolMapper.ToBinanceSymbol)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Binance BBO stream crashed. Reconnecting in 5 seconds...");
-
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
+        // Binance's !bookTicker stream broadcasts every symbol; no explicit
+        // subscribe message is needed, incoming ticks are just filtered by symbol.
+        return Task.CompletedTask;
     }
 
-    private async Task RunConnectionAsync(CancellationToken ct)
+    protected override Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
     {
-        using var socket = new ClientWebSocket();
-
-        _logger.LogInformation("Connecting to Binance BBO stream: {Url}", WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation(
-            "Connected to Binance BBO stream. AllowedSymbols={Count}",
-            _allowedSymbols.Count);
-
-        var buffer = new byte[1024 * 16];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            ProcessMessage(message);
-        }
+        ProcessMessage(json);
+        return Task.CompletedTask;
     }
 
     internal void ProcessMessage(string json)
@@ -88,7 +55,7 @@ public sealed class BinanceBboStream : IBestBidAskStream
         if (dto is null)
             return;
 
-        if (!_allowedSymbols.Contains(dto.Symbol))
+        if (!AllowedSymbols.Contains(dto.Symbol))
             return;
 
         if (!decimal.TryParse(dto.BestBidPrice, NumberStyles.Number, CultureInfo.InvariantCulture, out var bidPrice))
@@ -119,29 +86,6 @@ public sealed class BinanceBboStream : IBestBidAskStream
             ReceivedAt: now);
 
         _cache.Set(snapshot);
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
     }
 
     private sealed class BinanceBookTickerMessage
