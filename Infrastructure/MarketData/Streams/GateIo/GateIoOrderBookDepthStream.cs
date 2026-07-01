@@ -1,187 +1,103 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.GateIo;
 
-public sealed class GateIoOrderBookDepthStream : IOrderBookDepthStream
+public sealed class GateIoOrderBookDepthStream : DepthStreamBase
 {
     private const string Connector = "gate_io_perpetual";
-    private const string WsUrl = "wss://fx-ws.gateio.ws/v4/ws/usdt";
     private const string Channel = "futures.order_book";
 
-    private readonly DepthSubscriptionTargetStore _targetStore;
     private readonly OrderBookDepthCache _depthCache;
     private readonly ILogger<GateIoOrderBookDepthStream> _logger;
-
-    private readonly HashSet<string> _subscribedContracts =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private SemaphoreSlim? _sendLock;
-
-    public string ConnectorName => Connector;
 
     public GateIoOrderBookDepthStream(
         DepthSubscriptionTargetStore targetStore,
         OrderBookDepthCache depthCache,
         ILogger<GateIoOrderBookDepthStream> logger)
+        : base(targetStore, depthCache, logger)
     {
-        _targetStore = targetStore;
         _depthCache = depthCache;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Gate.io depth stream crashed. Reconnecting in 5 seconds...");
+    public override string ConnectorName => Connector;
 
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
-    }
+    protected override string WsUrl => "wss://fx-ws.gateio.ws/v4/ws/usdt";
 
-    private async Task RunConnectionAsync(CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
+    protected override int ReceiveBufferSize => 1024 * 256;
 
-        _sendLock = new SemaphoreSlim(1, 1);
-        _subscribedContracts.Clear();
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        GateIoSymbolMapper.ToGateIoContract(tradingPair);
 
-        _logger.LogInformation("Connecting to Gate.io depth stream: {Url}", WsUrl);
+    protected override string MapExchangeSymbolToTradingPair(string exchangeSymbol) =>
+        GateIoSymbolMapper.FromGateIoContract(exchangeSymbol);
 
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation("Connected to Gate.io depth stream.");
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var subscriptionTask = SubscriptionLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, subscriptionTask, pingTask);
-    }
-
-    private async Task SubscriptionLoopAsync(
+    protected override Task SubscribeAsync(
         ClientWebSocket socket,
-        CancellationToken ct)
+        IReadOnlyList<string> symbolsToAdd,
+        CancellationToken ct) =>
+        SendSubscriptionAsync(socket, "subscribe", symbolsToAdd, ct, isSubscribe: true);
+
+    protected override Task UnsubscribeAsync(
+        ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToRemove,
+        CancellationToken ct) =>
+        SendSubscriptionAsync(socket, "unsubscribe", symbolsToRemove, ct, isSubscribe: false);
+
+    private async Task SendSubscriptionAsync(
+        ClientWebSocket socket,
+        string @event,
+        IReadOnlyList<string> contracts,
+        CancellationToken ct,
+        bool isSubscribe)
     {
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        foreach (var contract in contracts)
         {
-            var desiredContracts = _targetStore
-                .GetPairsForConnector(Connector)
-                .Select(GateIoSymbolMapper.ToGateIoContract)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var toSubscribe = desiredContracts
-                .Except(_subscribedContracts, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            var toUnsubscribe = _subscribedContracts
-                .Except(desiredContracts, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            if (toSubscribe.Count > 0)
+            var payload = JsonSerializer.Serialize(new
             {
-                await SendSubscriptionAsync(
-                    socket,
-                    @event: "subscribe",
-                    contracts: toSubscribe,
-                    ct);
-
-                foreach (var contract in toSubscribe)
-                    _subscribedContracts.Add(contract);
-
-                _logger.LogInformation(
-                    "Gate.io depth subscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
-                    toSubscribe.Count,
-                    _subscribedContracts.Count,
-                    string.Join(", ", toSubscribe.Take(5)));
-            }
-
-            if (toUnsubscribe.Count > 0)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    @event: "unsubscribe",
-                    contracts: toUnsubscribe,
-                    ct);
-
-                foreach (var contract in toUnsubscribe)
+                time = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                channel = Channel,
+                @event,
+                payload = new object[]
                 {
-                    _subscribedContracts.Remove(contract);
-
-                    _depthCache.Remove(
-                        Connector,
-                        GateIoSymbolMapper.FromGateIoContract(contract));
+                    contract,
+                    "20",
+                    "0"
                 }
+            });
 
-                _logger.LogInformation(
-                    "Gate.io depth unsubscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
-                    toUnsubscribe.Count,
-                    _subscribedContracts.Count,
-                    string.Join(", ", toUnsubscribe.Take(5)));
-            }
-
-            await Task.Delay(1000, ct);
+            await SendTextAsync(socket, payload, ct);
+            await Task.Delay(200, ct);
         }
-    }
 
-    private async Task ReceiveLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        var buffer = new byte[1024 * 256];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        if (isSubscribe)
         {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                ProcessMessage(message);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse Gate.io depth message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process Gate.io depth message. Raw={Raw}",
-                    message);
-            }
+            _logger.LogInformation(
+                "Gate.io depth subscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
+                contracts.Count,
+                SubscribedSymbolCount,
+                string.Join(", ", contracts.Take(5)));
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Gate.io depth unsubscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
+                contracts.Count,
+                SubscribedSymbolCount,
+                string.Join(", ", contracts.Take(5)));
         }
     }
 
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
+    protected override Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) =>
+        PingLoopAsync(socket, ct);
+
+    private async Task PingLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested &&
                socket.State == WebSocketState.Open)
@@ -199,6 +115,33 @@ public sealed class GateIoOrderBookDepthStream : IOrderBookDepthStream
 
             await SendTextAsync(socket, payload, ct);
         }
+    }
+
+    protected override async Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
+    {
+        try
+        {
+            ProcessMessage(json);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse Gate.io depth message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process Gate.io depth message. Raw={Raw}",
+                json);
+        }
+
+        await Task.CompletedTask;
     }
 
     private void ProcessMessage(string json)
@@ -244,7 +187,7 @@ public sealed class GateIoOrderBookDepthStream : IOrderBookDepthStream
         if (string.IsNullOrWhiteSpace(item.Contract))
             return;
 
-        if (!_subscribedContracts.Contains(item.Contract))
+        if (!IsSubscribed(item.Contract))
             return;
 
         var bids = item.Bids
@@ -282,73 +225,14 @@ public sealed class GateIoOrderBookDepthStream : IOrderBookDepthStream
         _depthCache.Set(snapshot);
     }
 
-    private async Task SendSubscriptionAsync(
-        ClientWebSocket socket,
-        string @event,
-        IReadOnlyList<string> contracts,
-        CancellationToken ct)
-    {
-        const int batchSize = 10;
-
-        foreach (var contract in contracts)
-        {
-            var payload = JsonSerializer.Serialize(new
-            {
-                time = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                channel = Channel,
-                @event,
-                payload = new object[]
-                {
-                    contract,
-                    "20",
-                    "0"
-                }
-            });
-
-            await SendTextAsync(socket, payload, ct);
-            await Task.Delay(200, ct);
-        }
-    }
-
-    private async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (_sendLock is null)
-            throw new InvalidOperationException("Gate.io send lock is not initialized.");
-
-        await _sendLock.WaitAsync(ct);
-
-        try
-        {
-            if (socket.State != WebSocketState.Open)
-                return;
-
-            var bytes = Encoding.UTF8.GetBytes(payload);
-
-            await socket.SendAsync(
-                bytes,
-                WebSocketMessageType.Text,
-                endOfMessage: true,
-                cancellationToken: ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
     private static bool TryReadDecimal(
-    JsonElement element,
-    out decimal value)
+        JsonElement element,
+        out decimal value)
     {
         value = 0;
 
         if (element.ValueKind == JsonValueKind.Number)
-        {
             return element.TryGetDecimal(out value);
-        }
 
         if (element.ValueKind == JsonValueKind.String)
         {
@@ -362,49 +246,15 @@ public sealed class GateIoOrderBookDepthStream : IOrderBookDepthStream
         return false;
     }
 
-    private static OrderBookDepthLevel ParseLevel(
-    GateIoOrderBookLevel level)
+    private static OrderBookDepthLevel ParseLevel(GateIoOrderBookLevel level)
     {
         if (!TryReadDecimal(level.Price, out var price))
-        {
-            return new OrderBookDepthLevel(
-                Price: 0,
-                Amount: 0);
-        }
+            return new OrderBookDepthLevel(Price: 0, Amount: 0);
 
         if (!TryReadDecimal(level.Size, out var size))
-        {
-            return new OrderBookDepthLevel(
-                Price: 0,
-                Amount: 0);
-        }
+            return new OrderBookDepthLevel(Price: 0, Amount: 0);
 
-        return new OrderBookDepthLevel(
-            Price: price,
-            Amount: Math.Abs(size));
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
+        return new OrderBookDepthLevel(Price: price, Amount: Math.Abs(size));
     }
 
     private sealed class GateIoWsMessage

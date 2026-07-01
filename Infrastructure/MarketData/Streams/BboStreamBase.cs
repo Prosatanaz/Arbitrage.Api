@@ -51,6 +51,12 @@ public abstract class BboStreamBase : WsStreamBase, IBestBidAskStream
 
     protected virtual Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) => null;
 
+    // When true, SubscribeAsync runs concurrently with the receive/ping loops
+    // instead of being awaited before they start - lets ticks for
+    // already-subscribed symbols flow in while later batches are still being
+    // sent, instead of holding the connection idle until subscribing finishes.
+    protected virtual bool SubscribeConcurrently => false;
+
     protected virtual void OnConnecting()
     {
         _logger.LogInformation("Connecting to {Connector} BBO stream.", ConnectorName);
@@ -71,7 +77,8 @@ public abstract class BboStreamBase : WsStreamBase, IBestBidAskStream
             ConnectorName,
             AllowedSymbols.Count);
 
-        await SubscribeAsync(socket, AllowedSymbols.ToList(), ct);
+        if (!SubscribeConcurrently)
+            await SubscribeAsync(socket, AllowedSymbols.ToList(), ct);
 
         var tasks = new List<Task> { ReceiveLoopAsync(socket, ct) };
 
@@ -79,6 +86,32 @@ public abstract class BboStreamBase : WsStreamBase, IBestBidAskStream
 
         if (pingTask is not null)
             tasks.Add(pingTask);
+
+        if (SubscribeConcurrently)
+        {
+            var subscriptionTask = SubscribeAsync(socket, AllowedSymbols.ToList(), ct);
+
+            while (!ct.IsCancellationRequested)
+            {
+                var allTasks = subscriptionTask is null
+                    ? tasks
+                    : tasks.Append(subscriptionTask).ToList();
+
+                var completed = await Task.WhenAny(allTasks);
+
+                if (completed == subscriptionTask)
+                {
+                    await subscriptionTask;
+                    subscriptionTask = null;
+                    continue;
+                }
+
+                await completed;
+                return;
+            }
+
+            return;
+        }
 
         await Task.WhenAny(tasks);
     }

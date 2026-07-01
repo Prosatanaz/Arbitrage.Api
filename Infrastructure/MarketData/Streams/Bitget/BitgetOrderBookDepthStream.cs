@@ -1,188 +1,105 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.Bitget;
 
-public sealed class BitgetOrderBookDepthStream : IOrderBookDepthStream
+public sealed class BitgetOrderBookDepthStream : DepthStreamBase
 {
     private const string Connector = "bitget_perpetual";
-    private const string WsUrl = "wss://ws.bitget.com/v2/ws/public";
     private const string InstType = "USDT-FUTURES";
     private const string Channel = "books5";
 
-    private readonly DepthSubscriptionTargetStore _targetStore;
     private readonly OrderBookDepthCache _depthCache;
     private readonly ILogger<BitgetOrderBookDepthStream> _logger;
-
-    private readonly HashSet<string> _subscribedSymbols =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private SemaphoreSlim? _sendLock;
-
-    public string ConnectorName => Connector;
 
     public BitgetOrderBookDepthStream(
         DepthSubscriptionTargetStore targetStore,
         OrderBookDepthCache depthCache,
         ILogger<BitgetOrderBookDepthStream> logger)
+        : base(targetStore, depthCache, logger)
     {
-        _targetStore = targetStore;
         _depthCache = depthCache;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Bitget depth stream crashed. Reconnecting in 5 seconds...");
+    public override string ConnectorName => Connector;
 
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
-    }
+    protected override string WsUrl => "wss://ws.bitget.com/v2/ws/public";
 
-    private async Task RunConnectionAsync(CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
+    protected override int ReceiveBufferSize => 1024 * 256;
 
-        _sendLock = new SemaphoreSlim(1, 1);
-        _subscribedSymbols.Clear();
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        BitgetSymbolMapper.ToBitgetSymbol(tradingPair);
 
-        _logger.LogInformation("Connecting to Bitget depth stream: {Url}", WsUrl);
+    protected override string MapExchangeSymbolToTradingPair(string exchangeSymbol) =>
+        BitgetSymbolMapper.FromBitgetSymbol(exchangeSymbol);
 
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation("Connected to Bitget depth stream.");
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var subscriptionTask = SubscriptionLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, subscriptionTask, pingTask);
-    }
-
-    private async Task SubscriptionLoopAsync(
+    protected override Task SubscribeAsync(
         ClientWebSocket socket,
-        CancellationToken ct)
+        IReadOnlyList<string> symbolsToAdd,
+        CancellationToken ct) =>
+        SendSubscriptionAsync(socket, "subscribe", symbolsToAdd, ct, isSubscribe: true);
+
+    protected override Task UnsubscribeAsync(
+        ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToRemove,
+        CancellationToken ct) =>
+        SendSubscriptionAsync(socket, "unsubscribe", symbolsToRemove, ct, isSubscribe: false);
+
+    private async Task SendSubscriptionAsync(
+        ClientWebSocket socket,
+        string op,
+        IReadOnlyList<string> symbols,
+        CancellationToken ct,
+        bool isSubscribe)
     {
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        const int batchSize = 20;
+
+        foreach (var batch in symbols.Chunk(batchSize))
         {
-            var desiredSymbols = _targetStore
-                .GetPairsForConnector(Connector)
-                .Select(BitgetSymbolMapper.ToBitgetSymbol)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var toSubscribe = desiredSymbols
-                .Except(_subscribedSymbols, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            var toUnsubscribe = _subscribedSymbols
-                .Except(desiredSymbols, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            if (toSubscribe.Count > 0)
+            var payload = JsonSerializer.Serialize(new
             {
-                await SendSubscriptionAsync(
-                    socket,
-                    op: "subscribe",
-                    symbols: toSubscribe,
-                    ct);
-
-                foreach (var symbol in toSubscribe)
-                    _subscribedSymbols.Add(symbol);
-
-                _logger.LogInformation(
-                    "Bitget depth subscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
-                    toSubscribe.Count,
-                    _subscribedSymbols.Count,
-                    string.Join(", ", toSubscribe.Take(5)));
-            }
-
-            if (toUnsubscribe.Count > 0)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    op: "unsubscribe",
-                    symbols: toUnsubscribe,
-                    ct);
-
-                foreach (var symbol in toUnsubscribe)
+                op,
+                args = batch.Select(symbol => new
                 {
-                    _subscribedSymbols.Remove(symbol);
+                    instType = InstType,
+                    channel = Channel,
+                    instId = symbol
+                }).ToList()
+            });
 
-                    _depthCache.Remove(
-                        Connector,
-                        BitgetSymbolMapper.FromBitgetSymbol(symbol));
-                }
-
-                _logger.LogInformation(
-                    "Bitget depth unsubscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
-                    toUnsubscribe.Count,
-                    _subscribedSymbols.Count,
-                    string.Join(", ", toUnsubscribe.Take(5)));
-            }
+            await SendTextAsync(socket, payload, ct);
 
             await Task.Delay(1000, ct);
         }
-    }
 
-    private async Task ReceiveLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        var buffer = new byte[1024 * 256];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        if (isSubscribe)
         {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                ProcessMessage(message);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse Bitget depth message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process Bitget depth message. Raw={Raw}",
-                    message);
-            }
+            _logger.LogInformation(
+                "Bitget depth subscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
+                symbols.Count,
+                SubscribedSymbolCount,
+                string.Join(", ", symbols.Take(5)));
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Bitget depth unsubscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
+                symbols.Count,
+                SubscribedSymbolCount,
+                string.Join(", ", symbols.Take(5)));
         }
     }
 
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
+    protected override Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) =>
+        PingLoopAsync(socket, ct);
+
+    private async Task PingLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested &&
                socket.State == WebSocketState.Open)
@@ -194,6 +111,33 @@ public sealed class BitgetOrderBookDepthStream : IOrderBookDepthStream
 
             await SendTextAsync(socket, "ping", ct);
         }
+    }
+
+    protected override async Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
+    {
+        try
+        {
+            ProcessMessage(json);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse Bitget depth message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process Bitget depth message. Raw={Raw}",
+                json);
+        }
+
+        await Task.CompletedTask;
     }
 
     private void ProcessMessage(string json)
@@ -244,7 +188,7 @@ public sealed class BitgetOrderBookDepthStream : IOrderBookDepthStream
         if (string.IsNullOrWhiteSpace(symbol))
             return;
 
-        if (!_subscribedSymbols.Contains(symbol))
+        if (!IsSubscribed(symbol))
             return;
 
         var bids = item.Bids
@@ -283,62 +227,6 @@ public sealed class BitgetOrderBookDepthStream : IOrderBookDepthStream
         _depthCache.Set(snapshot);
     }
 
-    private async Task SendSubscriptionAsync(
-        ClientWebSocket socket,
-        string op,
-        IReadOnlyList<string> symbols,
-        CancellationToken ct)
-    {
-        const int batchSize = 20;
-
-        foreach (var batch in symbols.Chunk(batchSize))
-        {
-            var payload = JsonSerializer.Serialize(new
-            {
-                op,
-                args = batch.Select(symbol => new
-                {
-                    instType = InstType,
-                    channel = Channel,
-                    instId = symbol
-                }).ToList()
-            });
-
-            await SendTextAsync(socket, payload, ct);
-
-            await Task.Delay(1000, ct);
-        }
-    }
-
-    private async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (_sendLock is null)
-            throw new InvalidOperationException("Bitget send lock is not initialized.");
-
-        await _sendLock.WaitAsync(ct);
-
-        try
-        {
-            if (socket.State != WebSocketState.Open)
-                return;
-
-            var bytes = Encoding.UTF8.GetBytes(payload);
-
-            await socket.SendAsync(
-                bytes,
-                WebSocketMessageType.Text,
-                endOfMessage: true,
-                cancellationToken: ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
     private static OrderBookDepthLevel ParseLevel(
         IReadOnlyList<string> values)
     {
@@ -360,29 +248,6 @@ public sealed class BitgetOrderBookDepthStream : IOrderBookDepthStream
         return priceOk && amountOk
             ? new OrderBookDepthLevel(price, amount)
             : new OrderBookDepthLevel(0, 0);
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
     }
 
     private sealed class BitgetOrderBookMessage

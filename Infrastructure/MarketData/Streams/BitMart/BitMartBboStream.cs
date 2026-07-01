@@ -1,118 +1,49 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using Arbitrage.Api.Application.MarketData.Streaming;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.BitMart;
 
-public sealed class BitMartBboStream : IBestBidAskStream
+public sealed class BitMartBboStream : BboStreamBase
 {
     private const string Connector = "bitmart_perpetual";
-    private const string WsUrl = "wss://openapi-ws-v2.bitmart.com/api?protocol=1.1";
     private const string Channel = "futures/bookticker";
 
     private readonly BestBidAskCache _cache;
     private readonly ILogger<BitMartBboStream> _logger;
 
-    private readonly HashSet<string> _subscribedSymbols =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private SemaphoreSlim? _sendLock;
     private int _successfulUpdatesLogged;
-
-    public string ConnectorName => Connector;
 
     public BitMartBboStream(
         BestBidAskCache cache,
         ILogger<BitMartBboStream> logger)
+        : base(logger)
     {
         _cache = cache;
         _logger = logger;
     }
 
-    public async Task StartAsync(
-        IReadOnlyList<string> tradingPairs,
-        CancellationToken ct)
+    public override string ConnectorName => Connector;
+
+    protected override string WsUrl => "wss://openapi-ws-v2.bitmart.com/api?protocol=1.1";
+
+    protected override int ReceiveBufferSize => 1024 * 256;
+
+    protected override bool SubscribeConcurrently => true;
+
+    protected override void OnConnecting()
     {
-        var symbols = tradingPairs
-            .Select(BitMartSymbolMapper.ToBitMartSymbol)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x)
-            .ToList();
-
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(symbols, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "BitMart BBO stream crashed. Reconnecting in 5 seconds...");
-
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
-    }
-
-    private async Task RunConnectionAsync(
-        IReadOnlyList<string> symbols,
-        CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
-
-        _sendLock = new SemaphoreSlim(1, 1);
-        _subscribedSymbols.Clear();
         _successfulUpdatesLogged = 0;
-
-        _logger.LogInformation("Connecting to BitMart BBO stream: {Url}", WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation(
-            "Connected to BitMart BBO stream. Symbols={Symbols}",
-            symbols.Count);
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, ct);
-        var subscriptionTask = SubscribeAsync(socket, symbols, ct);
-
-        while (!ct.IsCancellationRequested)
-        {
-            var completedTask = await Task.WhenAny(
-                receiveTask,
-                pingTask,
-                subscriptionTask);
-
-            if (completedTask == subscriptionTask)
-            {
-                await subscriptionTask;
-
-                _logger.LogInformation(
-                    "BitMart BBO subscription completed. Total={Total}",
-                    _subscribedSymbols.Count);
-
-                subscriptionTask = Task.Delay(
-                    Timeout.InfiniteTimeSpan,
-                    ct);
-
-                continue;
-            }
-
-            await completedTask;
-            break;
-        }
+        base.OnConnecting();
     }
 
-    private async Task SubscribeAsync(
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        BitMartSymbolMapper.ToBitMartSymbol(tradingPair);
+
+    protected override async Task SubscribeAsync(
         ClientWebSocket socket,
         IReadOnlyList<string> symbols,
         CancellationToken ct)
@@ -131,58 +62,23 @@ public sealed class BitMartBboStream : IBestBidAskStream
 
             await SendTextAsync(socket, payload, ct);
 
-            foreach (var symbol in batch)
-            {
-                _subscribedSymbols.Add(symbol);
-            }
-
             _logger.LogInformation(
                 "BitMart BBO subscribe requested. BatchSize={BatchSize}, Total={Total}",
                 batch.Length,
-                _subscribedSymbols.Count);
+                AllowedSymbols.Count);
 
             await Task.Delay(1000, ct);
         }
+
+        _logger.LogInformation(
+            "BitMart BBO subscription completed. Total={Total}",
+            AllowedSymbols.Count);
     }
 
-    private async Task ReceiveLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        var buffer = new byte[1024 * 256];
+    protected override Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) =>
+        PingLoopAsync(socket, ct);
 
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                ProcessMessage(message);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse BitMart BBO message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process BitMart BBO message. Raw={Raw}",
-                    message);
-            }
-        }
-    }
-
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
+    private async Task PingLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested &&
                socket.State == WebSocketState.Open)
@@ -194,6 +90,33 @@ public sealed class BitMartBboStream : IBestBidAskStream
 
             await SendTextAsync(socket, "{\"action\":\"ping\"}", ct);
         }
+    }
+
+    protected override async Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
+    {
+        try
+        {
+            ProcessMessage(json);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse BitMart BBO message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process BitMart BBO message. Raw={Raw}",
+                json);
+        }
+
+        await Task.CompletedTask;
     }
 
     private void ProcessMessage(string json)
@@ -233,7 +156,7 @@ public sealed class BitMartBboStream : IBestBidAskStream
         if (!TryGetStringProperty(data, "symbol", out var symbol))
             return;
 
-        if (!_subscribedSymbols.Contains(symbol))
+        if (!AllowedSymbols.Contains(symbol))
             return;
 
         if (!TryGetDecimalProperty(data, "best_bid_price", out var bidPrice))
@@ -278,58 +201,6 @@ public sealed class BitMartBboStream : IBestBidAskStream
                 bidPrice,
                 askPrice);
         }
-    }
-
-    private async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (_sendLock is null)
-            throw new InvalidOperationException("BitMart send lock is not initialized.");
-
-        await _sendLock.WaitAsync(ct);
-
-        try
-        {
-            if (socket.State != WebSocketState.Open)
-                return;
-
-            var bytes = Encoding.UTF8.GetBytes(payload);
-
-            await socket.SendAsync(
-                bytes,
-                WebSocketMessageType.Text,
-                true,
-                ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
     }
 
     private static bool TryGetPropertyIgnoreCase(

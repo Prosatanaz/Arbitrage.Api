@@ -1,87 +1,44 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Arbitrage.Api.Application.MarketData.Streaming;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.Bybit;
 
-public sealed class BybitBboStream : IBestBidAskStream
+public sealed class BybitBboStream : BboStreamBase
 {
     private const string Connector = "bybit_perpetual";
-    private const string WsUrl = "wss://stream.bybit.com/v5/public/linear";
 
     private readonly BestBidAskCache _cache;
     private readonly ILogger<BybitBboStream> _logger;
 
-    private HashSet<string> _allowedSymbols = new(StringComparer.OrdinalIgnoreCase);
-
-    public string ConnectorName => Connector;
-
     public BybitBboStream(
         BestBidAskCache cache,
         ILogger<BybitBboStream> logger)
+        : base(logger)
     {
         _cache = cache;
         _logger = logger;
     }
 
-    public async Task StartAsync(
-        IReadOnlyList<string> tradingPairs,
-        CancellationToken ct)
-    {
-        _allowedSymbols = tradingPairs
-            .Select(BybitSymbolMapper.ToBybitSymbol)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    public override string ConnectorName => Connector;
 
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Bybit BBO stream crashed. Reconnecting in 5 seconds...");
+    protected override string WsUrl => "wss://stream.bybit.com/v5/public/linear";
 
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
-    }
+    protected override int ReceiveBufferSize => 1024 * 64;
 
-    private async Task RunConnectionAsync(CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        BybitSymbolMapper.ToBybitSymbol(tradingPair);
 
-        _logger.LogInformation("Connecting to Bybit BBO stream: {Url}", WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation(
-            "Connected to Bybit BBO stream. AllowedSymbols={Count}",
-            _allowedSymbols.Count);
-
-        await SubscribeAsync(socket, ct);
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, pingTask);
-    }
-
-    private async Task SubscribeAsync(
+    protected override async Task SubscribeAsync(
         ClientWebSocket socket,
+        IReadOnlyList<string> symbols,
         CancellationToken ct)
     {
-        var topics = _allowedSymbols
+        var topics = symbols
             .Select(symbol => $"tickers.{symbol}")
             .ToArray();
 
@@ -100,27 +57,10 @@ public sealed class BybitBboStream : IBestBidAskStream
             topics.Length);
     }
 
-    private async Task ReceiveLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        var buffer = new byte[1024 * 64];
+    protected override Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) =>
+        PingLoopAsync(socket, ct);
 
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            ProcessMessage(message);
-        }
-    }
-
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
+    private async Task PingLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested &&
                socket.State == WebSocketState.Open)
@@ -134,7 +74,10 @@ public sealed class BybitBboStream : IBestBidAskStream
         }
     }
 
-    private void ProcessMessage(string json)
+    protected override Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
     {
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -157,47 +100,47 @@ public sealed class BybitBboStream : IBestBidAskStream
                 retMsg,
                 json);
 
-            return;
+            return Task.CompletedTask;
         }
 
         if (!root.TryGetProperty("topic", out var topicElement))
-            return;
+            return Task.CompletedTask;
 
         var topic = topicElement.GetString();
 
         if (topic is null ||
             !topic.StartsWith("tickers.", StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            return Task.CompletedTask;
         }
 
         var dto = JsonSerializer.Deserialize<BybitTickerMessage>(json);
 
         if (dto?.Data is null)
-            return;
+            return Task.CompletedTask;
 
         var symbol = dto.Data.Symbol;
 
         if (string.IsNullOrWhiteSpace(symbol))
-            return;
+            return Task.CompletedTask;
 
-        if (!_allowedSymbols.Contains(symbol))
-            return;
+        if (!AllowedSymbols.Contains(symbol))
+            return Task.CompletedTask;
 
         if (!TryParseDecimal(dto.Data.Bid1Price, out var bidPrice))
-            return;
+            return Task.CompletedTask;
 
         if (!TryParseDecimal(dto.Data.Bid1Size, out var bidAmount))
             bidAmount = 0;
 
         if (!TryParseDecimal(dto.Data.Ask1Price, out var askPrice))
-            return;
+            return Task.CompletedTask;
 
         if (!TryParseDecimal(dto.Data.Ask1Size, out var askAmount))
             askAmount = 0;
 
         if (bidPrice <= 0 || askPrice <= 0)
-            return;
+            return Task.CompletedTask;
 
         var receivedAt = DateTimeOffset.UtcNow;
 
@@ -216,6 +159,8 @@ public sealed class BybitBboStream : IBestBidAskStream
             ReceivedAt: receivedAt);
 
         _cache.Set(snapshot);
+
+        return Task.CompletedTask;
     }
 
     private static bool TryParseDecimal(
@@ -227,43 +172,6 @@ public sealed class BybitBboStream : IBestBidAskStream
             NumberStyles.Number,
             CultureInfo.InvariantCulture,
             out result);
-    }
-
-    private static async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        var bytes = Encoding.UTF8.GetBytes(payload);
-
-        await socket.SendAsync(
-            bytes,
-            WebSocketMessageType.Text,
-            endOfMessage: true,
-            cancellationToken: ct);
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
     }
 
     private sealed class BybitTickerMessage

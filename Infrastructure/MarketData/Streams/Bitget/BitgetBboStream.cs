@@ -1,95 +1,41 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Arbitrage.Api.Application.MarketData.Streaming;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.Bitget;
 
-public sealed class BitgetBboStream : IBestBidAskStream
+public sealed class BitgetBboStream : BboStreamBase
 {
     private const string Connector = "bitget_perpetual";
-    private const string WsUrl = "wss://ws.bitget.com/v2/ws/public";
     private const string InstType = "USDT-FUTURES";
     private const string Channel = "ticker";
 
     private readonly BestBidAskCache _cache;
     private readonly ILogger<BitgetBboStream> _logger;
 
-    private readonly HashSet<string> _subscribedSymbols =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private SemaphoreSlim? _sendLock;
-
-    public string ConnectorName => Connector;
-
     public BitgetBboStream(
         BestBidAskCache cache,
         ILogger<BitgetBboStream> logger)
+        : base(logger)
     {
         _cache = cache;
         _logger = logger;
     }
 
-    public async Task StartAsync(
-        IReadOnlyList<string> tradingPairs,
-        CancellationToken ct)
-    {
-        var symbols = tradingPairs
-            .Select(BitgetSymbolMapper.ToBitgetSymbol)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x)
-            .ToList();
+    public override string ConnectorName => Connector;
 
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(symbols, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Bitget BBO stream crashed. Reconnecting in 5 seconds...");
+    protected override string WsUrl => "wss://ws.bitget.com/v2/ws/public";
 
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
-    }
+    protected override int ReceiveBufferSize => 1024 * 256;
 
-    private async Task RunConnectionAsync(
-        IReadOnlyList<string> symbols,
-        CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        BitgetSymbolMapper.ToBitgetSymbol(tradingPair);
 
-        _sendLock = new SemaphoreSlim(1, 1);
-        _subscribedSymbols.Clear();
-
-        _logger.LogInformation("Connecting to Bitget BBO stream: {Url}", WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation(
-            "Connected to Bitget BBO stream. Symbols={Symbols}",
-            symbols.Count);
-
-        await SubscribeAsync(socket, symbols, ct);
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, pingTask);
-    }
-
-    private async Task SubscribeAsync(
+    protected override async Task SubscribeAsync(
         ClientWebSocket socket,
         IReadOnlyList<string> symbols,
         CancellationToken ct)
@@ -112,56 +58,19 @@ public sealed class BitgetBboStream : IBestBidAskStream
 
             await SendTextAsync(socket, payload, ct);
 
-            foreach (var symbol in batch)
-                _subscribedSymbols.Add(symbol);
-
             _logger.LogInformation(
                 "Bitget BBO subscribe requested. BatchSize={BatchSize}, Total={Total}",
                 batch.Length,
-                _subscribedSymbols.Count);
+                AllowedSymbols.Count);
 
             await Task.Delay(1000, ct);
         }
     }
 
-    private async Task ReceiveLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        var buffer = new byte[1024 * 256];
+    protected override Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) =>
+        PingLoopAsync(socket, ct);
 
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                ProcessMessage(message);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse Bitget BBO message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process Bitget BBO message. Raw={Raw}",
-                    message);
-            }
-        }
-    }
-
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
+    private async Task PingLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested &&
                socket.State == WebSocketState.Open)
@@ -173,6 +82,33 @@ public sealed class BitgetBboStream : IBestBidAskStream
 
             await SendTextAsync(socket, "ping", ct);
         }
+    }
+
+    protected override async Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
+    {
+        try
+        {
+            ProcessMessage(json);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse Bitget BBO message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process Bitget BBO message. Raw={Raw}",
+                json);
+        }
+
+        await Task.CompletedTask;
     }
 
     private void ProcessMessage(string json)
@@ -219,7 +155,7 @@ public sealed class BitgetBboStream : IBestBidAskStream
         if (string.IsNullOrWhiteSpace(symbol))
             return;
 
-        if (!_subscribedSymbols.Contains(symbol))
+        if (!AllowedSymbols.Contains(symbol))
             return;
 
         if (!TryParseDecimal(item.BidPrice, out var bidPrice))
@@ -258,58 +194,6 @@ public sealed class BitgetBboStream : IBestBidAskStream
             ReceivedAt: receivedAt);
 
         _cache.Set(snapshot);
-    }
-
-    private async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (_sendLock is null)
-            throw new InvalidOperationException("Bitget send lock is not initialized.");
-
-        await _sendLock.WaitAsync(ct);
-
-        try
-        {
-            if (socket.State != WebSocketState.Open)
-                return;
-
-            var bytes = Encoding.UTF8.GetBytes(payload);
-
-            await socket.SendAsync(
-                bytes,
-                WebSocketMessageType.Text,
-                endOfMessage: true,
-                cancellationToken: ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
     }
 
     private static bool TryParseDecimal(

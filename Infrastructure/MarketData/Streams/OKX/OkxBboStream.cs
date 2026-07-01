@@ -1,88 +1,44 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Arbitrage.Api.Application.MarketData.Streaming;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.Okx;
 
-public sealed class OkxBboStream : IBestBidAskStream
+public sealed class OkxBboStream : BboStreamBase
 {
     private const string Connector = "okx_perpetual";
-    private const string WsUrl = "wss://ws.okx.com:8443/ws/v5/public";
 
     private readonly BestBidAskCache _cache;
     private readonly ILogger<OkxBboStream> _logger;
 
-    private HashSet<string> _allowedInstrumentIds =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    public string ConnectorName => Connector;
-
     public OkxBboStream(
         BestBidAskCache cache,
         ILogger<OkxBboStream> logger)
+        : base(logger)
     {
         _cache = cache;
         _logger = logger;
     }
 
-    public async Task StartAsync(
-        IReadOnlyList<string> tradingPairs,
-        CancellationToken ct)
-    {
-        _allowedInstrumentIds = tradingPairs
-            .Select(OkxSymbolMapper.ToOkxInstrumentId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    public override string ConnectorName => Connector;
 
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "OKX BBO stream crashed. Reconnecting in 5 seconds...");
+    protected override string WsUrl => "wss://ws.okx.com:8443/ws/v5/public";
 
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
-    }
+    protected override int ReceiveBufferSize => 1024 * 64;
 
-    private async Task RunConnectionAsync(CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        OkxSymbolMapper.ToOkxInstrumentId(tradingPair);
 
-        _logger.LogInformation("Connecting to OKX BBO stream: {Url}", WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation(
-            "Connected to OKX BBO stream. AllowedInstruments={Count}",
-            _allowedInstrumentIds.Count);
-
-        await SubscribeAsync(socket, ct);
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, pingTask);
-    }
-
-    private async Task SubscribeAsync(
+    protected override async Task SubscribeAsync(
         ClientWebSocket socket,
+        IReadOnlyList<string> symbols,
         CancellationToken ct)
     {
-        var args = _allowedInstrumentIds
+        var args = symbols
             .Select(instId => new
             {
                 channel = "tickers",
@@ -114,27 +70,10 @@ public sealed class OkxBboStream : IBestBidAskStream
             args.Count);
     }
 
-    private async Task ReceiveLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        var buffer = new byte[1024 * 64];
+    protected override Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) =>
+        PingLoopAsync(socket, ct);
 
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            ProcessMessage(message);
-        }
-    }
-
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
+    private async Task PingLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested &&
                socket.State == WebSocketState.Open)
@@ -149,10 +88,13 @@ public sealed class OkxBboStream : IBestBidAskStream
         }
     }
 
-    private void ProcessMessage(string json)
+    protected override Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
     {
         if (json == "pong")
-            return;
+            return Task.CompletedTask;
 
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -170,18 +112,20 @@ public sealed class OkxBboStream : IBestBidAskStream
                 _logger.LogInformation("OKX WS control message: {Raw}", json);
             }
 
-            return;
+            return Task.CompletedTask;
         }
 
         var dto = JsonSerializer.Deserialize<OkxTickerMessage>(json);
 
         if (dto?.Data is null || dto.Data.Count == 0)
-            return;
+            return Task.CompletedTask;
 
         foreach (var item in dto.Data)
         {
             ProcessTicker(item);
         }
+
+        return Task.CompletedTask;
     }
 
     private void ProcessTicker(OkxTickerData item)
@@ -189,7 +133,7 @@ public sealed class OkxBboStream : IBestBidAskStream
         if (string.IsNullOrWhiteSpace(item.InstrumentId))
             return;
 
-        if (!_allowedInstrumentIds.Contains(item.InstrumentId))
+        if (!AllowedSymbols.Contains(item.InstrumentId))
             return;
 
         if (!TryParseDecimal(item.BidPrice, out var bidPrice))
@@ -235,43 +179,6 @@ public sealed class OkxBboStream : IBestBidAskStream
             NumberStyles.Number,
             CultureInfo.InvariantCulture,
             out result);
-    }
-
-    private static async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        var bytes = Encoding.UTF8.GetBytes(payload);
-
-        await socket.SendAsync(
-            bytes,
-            WebSocketMessageType.Text,
-            endOfMessage: true,
-            cancellationToken: ct);
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
     }
 
     private sealed class OkxTickerMessage

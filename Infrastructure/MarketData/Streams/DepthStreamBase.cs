@@ -62,6 +62,9 @@ public abstract class DepthStreamBase : WsStreamBase, IOrderBookDepthStream
 
     protected int SubscribedSymbolCount => _subscribed.Count;
 
+    protected bool IsSubscribed(string exchangeSymbol) =>
+        _subscribed.Contains(exchangeSymbol);
+
     protected virtual void OnConnecting()
     {
         _logger.LogInformation("Connecting to {Connector} depth stream.", ConnectorName);

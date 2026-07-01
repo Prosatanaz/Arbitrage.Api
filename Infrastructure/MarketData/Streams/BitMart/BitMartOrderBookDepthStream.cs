@@ -1,151 +1,71 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.BitMart;
 
-public sealed class BitMartOrderBookDepthStream : IOrderBookDepthStream
+public sealed class BitMartOrderBookDepthStream : DepthStreamBase
 {
     private const string Connector = "bitmart_perpetual";
-    private const string WsUrl = "wss://openapi-ws-v2.bitmart.com/api?protocol=1.1";
     private const string Channel = "futures/depthAll20";
     private const string Speed = "200ms";
 
-    private readonly DepthSubscriptionTargetStore _targetStore;
     private readonly OrderBookDepthCache _depthCache;
     private readonly BitMartContractMetadataStore _metadataStore;
     private readonly ILogger<BitMartOrderBookDepthStream> _logger;
 
-    private readonly HashSet<string> _subscribedSymbols =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private SemaphoreSlim? _sendLock;
     private int _successfulUpdatesLogged;
-
-    public string ConnectorName => Connector;
 
     public BitMartOrderBookDepthStream(
         DepthSubscriptionTargetStore targetStore,
         OrderBookDepthCache depthCache,
         BitMartContractMetadataStore metadataStore,
         ILogger<BitMartOrderBookDepthStream> logger)
+        : base(targetStore, depthCache, logger)
     {
-        _targetStore = targetStore;
         _depthCache = depthCache;
         _metadataStore = metadataStore;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
+    public override string ConnectorName => Connector;
+
+    protected override string WsUrl => "wss://openapi-ws-v2.bitmart.com/api?protocol=1.1";
+
+    protected override int ReceiveBufferSize => 1024 * 256;
+
+    protected override void OnConnectionReset()
     {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "BitMart depth stream crashed. Reconnecting in 5 seconds...");
-
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
-    }
-
-    private async Task RunConnectionAsync(CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
-
-        _sendLock = new SemaphoreSlim(1, 1);
-        _subscribedSymbols.Clear();
         _successfulUpdatesLogged = 0;
-
-        _logger.LogInformation("Connecting to BitMart depth stream: {Url}", WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation("Connected to BitMart depth stream.");
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, ct);
-        var subscriptionTask = SubscriptionLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, pingTask, subscriptionTask);
     }
 
-    private async Task SubscriptionLoopAsync(
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        BitMartSymbolMapper.ToBitMartSymbol(tradingPair);
+
+    protected override string MapExchangeSymbolToTradingPair(string exchangeSymbol) =>
+        BitMartSymbolMapper.FromBitMartSymbol(exchangeSymbol);
+
+    protected override Task SubscribeAsync(
         ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            var desiredSymbols = _targetStore
-                .GetPairsForConnector(Connector)
-                .Select(BitMartSymbolMapper.ToBitMartSymbol)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<string> symbolsToAdd,
+        CancellationToken ct) =>
+        SendSubscriptionAsync(socket, "subscribe", symbolsToAdd, ct, isSubscribe: true);
 
-            var toSubscribe = desiredSymbols
-                .Except(_subscribedSymbols, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            var toUnsubscribe = _subscribedSymbols
-                .Except(desiredSymbols, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            if (toSubscribe.Count > 0)
-            {
-                await SendSubscriptionAsync(socket, "subscribe", toSubscribe, ct);
-
-                foreach (var symbol in toSubscribe)
-                    _subscribedSymbols.Add(symbol);
-
-                _logger.LogInformation(
-                    "BitMart depth subscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
-                    toSubscribe.Count,
-                    _subscribedSymbols.Count,
-                    string.Join(", ", toSubscribe.Take(5)));
-            }
-
-            if (toUnsubscribe.Count > 0)
-            {
-                await SendSubscriptionAsync(socket, "unsubscribe", toUnsubscribe, ct);
-
-                foreach (var symbol in toUnsubscribe)
-                {
-                    _subscribedSymbols.Remove(symbol);
-
-                    _depthCache.Remove(
-                        Connector,
-                        BitMartSymbolMapper.FromBitMartSymbol(symbol));
-                }
-
-                _logger.LogInformation(
-                    "BitMart depth unsubscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
-                    toUnsubscribe.Count,
-                    _subscribedSymbols.Count,
-                    string.Join(", ", toUnsubscribe.Take(5)));
-            }
-
-            await Task.Delay(1000, ct);
-        }
-    }
+    protected override Task UnsubscribeAsync(
+        ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToRemove,
+        CancellationToken ct) =>
+        SendSubscriptionAsync(socket, "unsubscribe", symbolsToRemove, ct, isSubscribe: false);
 
     private async Task SendSubscriptionAsync(
         ClientWebSocket socket,
         string action,
         IReadOnlyList<string> symbols,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool isSubscribe)
     {
         const int batchSize = 20;
 
@@ -163,46 +83,29 @@ public sealed class BitMartOrderBookDepthStream : IOrderBookDepthStream
 
             await Task.Delay(1000, ct);
         }
-    }
 
-    private async Task ReceiveLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        var buffer = new byte[1024 * 256];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        if (isSubscribe)
         {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                ProcessMessage(message);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse BitMart depth message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process BitMart depth message. Raw={Raw}",
-                    message);
-            }
+            _logger.LogInformation(
+                "BitMart depth subscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
+                symbols.Count,
+                SubscribedSymbolCount,
+                string.Join(", ", symbols.Take(5)));
+        }
+        else
+        {
+            _logger.LogInformation(
+                "BitMart depth unsubscribe requested. Count={Count}, Total={Total}, Sample={Sample}",
+                symbols.Count,
+                SubscribedSymbolCount,
+                string.Join(", ", symbols.Take(5)));
         }
     }
 
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
+    protected override Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) =>
+        PingLoopAsync(socket, ct);
+
+    private async Task PingLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested &&
                socket.State == WebSocketState.Open)
@@ -214,6 +117,33 @@ public sealed class BitMartOrderBookDepthStream : IOrderBookDepthStream
 
             await SendTextAsync(socket, "{\"action\":\"ping\"}", ct);
         }
+    }
+
+    protected override async Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
+    {
+        try
+        {
+            ProcessMessage(json);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse BitMart depth message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process BitMart depth message. Raw={Raw}",
+                json);
+        }
+
+        await Task.CompletedTask;
     }
 
     private void ProcessMessage(string json)
@@ -254,7 +184,7 @@ public sealed class BitMartOrderBookDepthStream : IOrderBookDepthStream
         if (!TryGetStringProperty(data, "symbol", out var symbol))
             return;
 
-        if (!_subscribedSymbols.Contains(symbol))
+        if (!IsSubscribed(symbol))
             return;
 
         if (!TryGetPropertyIgnoreCase(data, "bids", out var bidsElement))
@@ -345,58 +275,6 @@ public sealed class BitMartOrderBookDepthStream : IOrderBookDepthStream
         }
 
         return result;
-    }
-
-    private async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (_sendLock is null)
-            throw new InvalidOperationException("BitMart send lock is not initialized.");
-
-        await _sendLock.WaitAsync(ct);
-
-        try
-        {
-            if (socket.State != WebSocketState.Open)
-                return;
-
-            var bytes = Encoding.UTF8.GetBytes(payload);
-
-            await socket.SendAsync(
-                bytes,
-                WebSocketMessageType.Text,
-                true,
-                ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
     }
 
     private static bool TryGetPropertyIgnoreCase(

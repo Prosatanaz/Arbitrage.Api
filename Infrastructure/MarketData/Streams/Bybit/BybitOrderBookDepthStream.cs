@@ -1,191 +1,120 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.Bybit;
 
-public sealed class BybitOrderBookDepthStream : IOrderBookDepthStream
+public sealed class BybitOrderBookDepthStream : DepthStreamBase
 {
     private const string Connector = "bybit_perpetual";
-    private const string WsUrl = "wss://stream.bybit.com/v5/public/linear";
     private const int Depth = 50;
 
-    private readonly DepthSubscriptionTargetStore _targetStore;
     private readonly OrderBookDepthCache _depthCache;
     private readonly ILogger<BybitOrderBookDepthStream> _logger;
 
-    private readonly HashSet<string> _subscribedTopics =
-        new(StringComparer.OrdinalIgnoreCase);
-
     private readonly ConcurrentDictionary<string, LocalOrderBook> _books =
         new(StringComparer.OrdinalIgnoreCase);
-
-    public string ConnectorName => Connector;
 
     public BybitOrderBookDepthStream(
         DepthSubscriptionTargetStore targetStore,
         OrderBookDepthCache depthCache,
         ILogger<BybitOrderBookDepthStream> logger)
+        : base(targetStore, depthCache, logger)
     {
-        _targetStore = targetStore;
         _depthCache = depthCache;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
+    public override string ConnectorName => Connector;
+
+    protected override string WsUrl => "wss://stream.bybit.com/v5/public/linear";
+
+    protected override int ReceiveBufferSize => 1024 * 256;
+
+    protected override void OnConnectionReset()
     {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Bybit depth stream crashed. Reconnecting in 5 seconds...");
-
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
-    }
-
-    private async Task RunConnectionAsync(CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
-
-        _subscribedTopics.Clear();
         _books.Clear();
-
-        _logger.LogInformation("Connecting to Bybit depth stream: {Url}", WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation("Connected to Bybit depth stream.");
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var subscriptionTask = SubscriptionLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, subscriptionTask, pingTask);
     }
 
-    private async Task SubscriptionLoopAsync(
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair)
+    {
+        var symbol = BybitSymbolMapper.ToBybitSymbol(tradingPair);
+
+        return $"orderbook.{Depth}.{symbol}";
+    }
+
+    protected override string MapExchangeSymbolToTradingPair(string exchangeSymbol)
+    {
+        var symbol = ExtractSymbolFromTopic(exchangeSymbol) ?? exchangeSymbol;
+
+        return BybitSymbolMapper.FromBybitSymbol(symbol);
+    }
+
+    protected override async Task SubscribeAsync(
         ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToAdd,
         CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        await SendSubscriptionAsync(socket, "subscribe", symbolsToAdd, ct);
+
+        _logger.LogInformation(
+            "Bybit depth subscribed. Count={Count}, Total={Total}",
+            symbolsToAdd.Count,
+            SubscribedSymbolCount);
+    }
+
+    protected override async Task UnsubscribeAsync(
+        ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToRemove,
+        CancellationToken ct)
+    {
+        await SendSubscriptionAsync(socket, "unsubscribe", symbolsToRemove, ct);
+
+        foreach (var topic in symbolsToRemove)
         {
-            var desiredTopics = _targetStore
-                .GetPairsForConnector(Connector)
-                .Select(ToTopicName)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var symbol = ExtractSymbolFromTopic(topic);
 
-            var toSubscribe = desiredTopics
-                .Except(_subscribedTopics, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            if (symbol is not null)
+                _books.TryRemove(symbol, out _);
+        }
 
-            var toUnsubscribe = _subscribedTopics
-                .Except(desiredTopics, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+        _logger.LogInformation(
+            "Bybit depth unsubscribed. Count={Count}, Total={Total}",
+            symbolsToRemove.Count,
+            SubscribedSymbolCount);
+    }
 
-            if (toSubscribe.Count > 0)
+    private async Task SendSubscriptionAsync(
+        ClientWebSocket socket,
+        string op,
+        IReadOnlyList<string> topics,
+        CancellationToken ct)
+    {
+        const int batchSize = 20;
+
+        foreach (var batch in topics.Chunk(batchSize))
+        {
+            var payload = JsonSerializer.Serialize(new
             {
-                await SendSubscriptionAsync(
-                    socket,
-                    op: "subscribe",
-                    topics: toSubscribe,
-                    ct);
+                op,
+                args = batch
+            });
 
-                foreach (var topic in toSubscribe)
-                    _subscribedTopics.Add(topic);
+            await SendTextAsync(socket, payload, ct);
 
-                _logger.LogInformation(
-                    "Bybit depth subscribed. Count={Count}, Total={Total}",
-                    toSubscribe.Count,
-                    _subscribedTopics.Count);
-            }
-
-            if (toUnsubscribe.Count > 0)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    op: "unsubscribe",
-                    topics: toUnsubscribe,
-                    ct);
-
-                foreach (var topic in toUnsubscribe)
-                {
-                    _subscribedTopics.Remove(topic);
-
-                    var symbol = ExtractSymbolFromTopic(topic);
-
-                    if (symbol is not null)
-                    {
-                        _books.TryRemove(symbol, out _);
-
-                        var tradingPair = BybitSymbolMapper.FromBybitSymbol(symbol);
-
-                        _depthCache.Remove(Connector, tradingPair);
-                    }
-                }
-
-                _logger.LogInformation(
-                    "Bybit depth unsubscribed. Count={Count}, Total={Total}",
-                    toUnsubscribe.Count,
-                    _subscribedTopics.Count);
-            }
-
-            await Task.Delay(1000, ct);
+            await Task.Delay(100, ct);
         }
     }
 
-    private async Task ReceiveLoopAsync(
+    protected override Task ProcessMessageAsync(
         ClientWebSocket socket,
+        string json,
         CancellationToken ct)
-    {
-        var buffer = new byte[1024 * 256];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            ProcessMessage(message);
-        }
-    }
-
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            await Task.Delay(TimeSpan.FromSeconds(20), ct);
-
-            if (socket.State != WebSocketState.Open)
-                break;
-
-            await SendTextAsync(socket, "{\"op\":\"ping\"}", ct);
-        }
-    }
-
-    private void ProcessMessage(string json)
     {
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -207,26 +136,28 @@ public sealed class BybitOrderBookDepthStream : IOrderBookDepthStream
                 success,
                 retMsg);
 
-            return;
+            return Task.CompletedTask;
         }
 
         if (!root.TryGetProperty("topic", out var topicElement))
-            return;
+            return Task.CompletedTask;
 
         var topic = topicElement.GetString();
 
         if (topic is null ||
             !topic.StartsWith("orderbook.", StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            return Task.CompletedTask;
         }
 
         var dto = JsonSerializer.Deserialize<BybitOrderBookMessage>(json);
 
         if (dto?.Data is null)
-            return;
+            return Task.CompletedTask;
 
         ProcessOrderBook(dto);
+
+        return Task.CompletedTask;
     }
 
     private void ProcessOrderBook(BybitOrderBookMessage dto)
@@ -278,13 +209,6 @@ public sealed class BybitOrderBookDepthStream : IOrderBookDepthStream
         _depthCache.Set(snapshot);
     }
 
-    private static string ToTopicName(string tradingPair)
-    {
-        var symbol = BybitSymbolMapper.ToBybitSymbol(tradingPair);
-
-        return $"orderbook.{Depth}.{symbol}";
-    }
-
     private static string? ExtractSymbolFromTopic(string topic)
     {
         // orderbook.50.BTCUSDT
@@ -293,65 +217,6 @@ public sealed class BybitOrderBookDepthStream : IOrderBookDepthStream
         return parts.Length == 3
             ? parts[2]
             : null;
-    }
-
-    private static async Task SendSubscriptionAsync(
-        ClientWebSocket socket,
-        string op,
-        IReadOnlyList<string> topics,
-        CancellationToken ct)
-    {
-        const int batchSize = 20;
-
-        foreach (var batch in topics.Chunk(batchSize))
-        {
-            var payload = JsonSerializer.Serialize(new
-            {
-                op,
-                args = batch
-            });
-
-            await SendTextAsync(socket, payload, ct);
-
-            await Task.Delay(100, ct);
-        }
-    }
-
-    private static async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        var bytes = Encoding.UTF8.GetBytes(payload);
-
-        await socket.SendAsync(
-            bytes,
-            WebSocketMessageType.Text,
-            endOfMessage: true,
-            cancellationToken: ct);
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
     }
 
     private sealed class LocalOrderBook
