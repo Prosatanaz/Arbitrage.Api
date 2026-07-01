@@ -1,4 +1,5 @@
-﻿using System.Net.WebSockets;
+﻿using System.Globalization;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -15,7 +16,7 @@ public sealed class BinanceBboStream : IBestBidAskStream
     private readonly BestBidAskCache _cache;
     private readonly ILogger<BinanceBboStream> _logger;
 
-    private HashSet<string> _allowedSymbols = new(StringComparer.OrdinalIgnoreCase);
+    internal HashSet<string> _allowedSymbols = new(StringComparer.OrdinalIgnoreCase);
 
     public string ConnectorName => Connector;
 
@@ -80,7 +81,7 @@ public sealed class BinanceBboStream : IBestBidAskStream
         }
     }
 
-    private void ProcessMessage(string json)
+    internal void ProcessMessage(string json)
     {
         var dto = JsonSerializer.Deserialize<BinanceBookTickerMessage>(json);
 
@@ -90,16 +91,16 @@ public sealed class BinanceBboStream : IBestBidAskStream
         if (!_allowedSymbols.Contains(dto.Symbol))
             return;
 
-        if (!decimal.TryParse(dto.BestBidPrice, out var bidPrice))
+        if (!decimal.TryParse(dto.BestBidPrice, NumberStyles.Number, CultureInfo.InvariantCulture, out var bidPrice))
             return;
 
-        if (!decimal.TryParse(dto.BestBidQuantity, out var bidAmount))
+        if (!decimal.TryParse(dto.BestBidQuantity, NumberStyles.Number, CultureInfo.InvariantCulture, out var bidAmount))
             return;
 
-        if (!decimal.TryParse(dto.BestAskPrice, out var askPrice))
+        if (!decimal.TryParse(dto.BestAskPrice, NumberStyles.Number, CultureInfo.InvariantCulture, out var askPrice))
             return;
 
-        if (!decimal.TryParse(dto.BestAskQuantity, out var askAmount))
+        if (!decimal.TryParse(dto.BestAskQuantity, NumberStyles.Number, CultureInfo.InvariantCulture, out var askAmount))
             return;
 
         if (bidPrice <= 0 || askPrice <= 0)

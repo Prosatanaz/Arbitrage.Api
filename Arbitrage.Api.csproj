@@ -27,4 +27,8 @@
     <EmbeddedResource Remove="Arbitrage.Api.Tests\**" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Arbitrage.Api.Tests" />
+  </ItemGroup>
+
 </Project>
