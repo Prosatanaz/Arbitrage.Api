@@ -1,148 +1,86 @@
-﻿using System.Globalization;
-using System.IO.Compression;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.BingX;
 
-public sealed class BingXOrderBookDepthStream : IOrderBookDepthStream
+public sealed class BingXOrderBookDepthStream : DepthStreamBase
 {
     private const string Connector = "bingx_perpetual";
-    private const string WsUrl = "wss://open-api-swap.bingx.com/swap-market";
 
-    private readonly DepthSubscriptionTargetStore _targetStore;
     private readonly OrderBookDepthCache _depthCache;
     private readonly ILogger<BingXOrderBookDepthStream> _logger;
 
-    private readonly HashSet<string> _subscribedSymbols =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private SemaphoreSlim? _sendLock;
     private int _successfulUpdatesLogged;
-
-    public string ConnectorName => Connector;
 
     public BingXOrderBookDepthStream(
         DepthSubscriptionTargetStore targetStore,
         OrderBookDepthCache depthCache,
         ILogger<BingXOrderBookDepthStream> logger)
+        : base(targetStore, depthCache, logger)
     {
-        _targetStore = targetStore;
         _depthCache = depthCache;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "BingX depth stream crashed. Reconnecting in 5 seconds...");
+    public override string ConnectorName => Connector;
 
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
+    protected override string WsUrl => "wss://open-api-swap.bingx.com/swap-market";
+
+    protected override int ReceiveBufferSize => 1024 * 512;
+
+    protected override void OnConnectionReset()
+    {
+        _successfulUpdatesLogged = 0;
+    }
+
+    protected override void OnConnecting()
+    {
+        _logger.LogInformation("Connecting to BingX depth stream: {Url}", WsUrl);
+    }
+
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        BingXSymbolMapper.ToBingXSymbol(tradingPair);
+
+    protected override string MapExchangeSymbolToTradingPair(string exchangeSymbol) =>
+        BingXSymbolMapper.FromBingXSymbol(exchangeSymbol);
+
+    protected override async Task SubscribeAsync(
+        ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToAdd,
+        CancellationToken ct)
+    {
+        foreach (var symbol in symbolsToAdd.OrderBy(x => x))
+        {
+            await SendSubscriptionAsync(socket, "sub", symbol, ct);
+
+            _logger.LogInformation(
+                "BingX depth subscribe requested. Symbol={Symbol}, Total={Total}",
+                symbol,
+                SubscribedSymbolCount);
+
+            await Task.Delay(100, ct);
         }
     }
 
-    private async Task RunConnectionAsync(CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
-
-        _sendLock = new SemaphoreSlim(1, 1);
-        _subscribedSymbols.Clear();
-        _successfulUpdatesLogged = 0;
-
-        _logger.LogInformation(
-            "Connecting to BingX depth stream: {Url}",
-            WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation("Connected to BingX depth stream.");
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var subscriptionTask = SubscriptionLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, subscriptionTask);
-    }
-
-    private async Task SubscriptionLoopAsync(
+    protected override async Task UnsubscribeAsync(
         ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToRemove,
         CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        foreach (var symbol in symbolsToRemove.OrderBy(x => x))
         {
-            var desiredSymbols = _targetStore
-                .GetPairsForConnector(Connector)
-                .Select(BingXSymbolMapper.ToBingXSymbol)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            await SendSubscriptionAsync(socket, "unsub", symbol, ct);
 
-            var toSubscribe = desiredSymbols
-                .Except(_subscribedSymbols, StringComparer.OrdinalIgnoreCase)
-                .OrderBy(x => x)
-                .ToList();
+            _logger.LogInformation(
+                "BingX depth unsubscribe requested. Symbol={Symbol}, Total={Total}",
+                symbol,
+                SubscribedSymbolCount);
 
-            var toUnsubscribe = _subscribedSymbols
-                .Except(desiredSymbols, StringComparer.OrdinalIgnoreCase)
-                .OrderBy(x => x)
-                .ToList();
-
-            foreach (var symbol in toSubscribe)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    reqType: "sub",
-                    symbol,
-                    ct);
-
-                _subscribedSymbols.Add(symbol);
-
-                _logger.LogInformation(
-                    "BingX depth subscribe requested. Symbol={Symbol}, Total={Total}",
-                    symbol,
-                    _subscribedSymbols.Count);
-
-                await Task.Delay(100, ct);
-            }
-
-            foreach (var symbol in toUnsubscribe)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    reqType: "unsub",
-                    symbol,
-                    ct);
-
-                _subscribedSymbols.Remove(symbol);
-
-                _depthCache.Remove(
-                    Connector,
-                    BingXSymbolMapper.FromBingXSymbol(symbol));
-
-                _logger.LogInformation(
-                    "BingX depth unsubscribe requested. Symbol={Symbol}, Total={Total}",
-                    symbol,
-                    _subscribedSymbols.Count);
-
-                await Task.Delay(100, ct);
-            }
-
-            await Task.Delay(1000, ct);
+            await Task.Delay(100, ct);
         }
     }
 
@@ -162,42 +100,48 @@ public sealed class BingXOrderBookDepthStream : IOrderBookDepthStream
         await SendTextAsync(socket, payload, ct);
     }
 
-    private async Task ReceiveLoopAsync(
+    protected override bool TryDecompress(
+        byte[] buffer,
+        int count,
+        WebSocketMessageType messageType,
+        out string text)
+    {
+        if (GzipTextDecoder.TryDecompress(buffer, count, out var decompressed))
+        {
+            text = decompressed;
+            return true;
+        }
+
+        text = System.Text.Encoding.UTF8.GetString(buffer, 0, count);
+        return true;
+    }
+
+    protected override async Task ProcessMessageAsync(
         ClientWebSocket socket,
+        string json,
         CancellationToken ct)
     {
-        var buffer = new byte[1024 * 512];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        try
         {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                await ProcessMessageAsync(socket, message, ct);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse BingX depth message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process BingX depth message. Raw={Raw}",
-                    message);
-            }
+            await HandleMessageAsync(socket, json, ct);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse BingX depth message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process BingX depth message. Raw={Raw}",
+                json);
         }
     }
 
-    private async Task ProcessMessageAsync(
+    private async Task HandleMessageAsync(
         ClientWebSocket socket,
         string json,
         CancellationToken ct)
@@ -254,7 +198,7 @@ public sealed class BingXOrderBookDepthStream : IOrderBookDepthStream
             return;
         }
 
-        if (!_subscribedSymbols.Contains(item.Symbol))
+        if (!IsSubscribed(item.Symbol))
             return;
 
         var bids = item.Bids
@@ -460,84 +404,6 @@ public sealed class BingXOrderBookDepthStream : IOrderBookDepthStream
             .ToUpperInvariant();
 
         return !string.IsNullOrWhiteSpace(symbol);
-    }
-
-    private async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (_sendLock is null)
-            throw new InvalidOperationException("BingX send lock is not initialized.");
-
-        await _sendLock.WaitAsync(ct);
-
-        try
-        {
-            if (socket.State != WebSocketState.Open)
-                return;
-
-            var bytes = Encoding.UTF8.GetBytes(payload);
-
-            await socket.SendAsync(
-                bytes,
-                WebSocketMessageType.Text,
-                endOfMessage: true,
-                cancellationToken: ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        var bytes = memory.ToArray();
-
-        if (TryDecompressGzip(bytes, out var decompressed))
-            return decompressed;
-
-        return Encoding.UTF8.GetString(bytes);
-    }
-
-    private static bool TryDecompressGzip(
-        byte[] bytes,
-        out string value)
-    {
-        value = "";
-
-        try
-        {
-            using var compressed = new MemoryStream(bytes);
-            using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
-            using var reader = new StreamReader(gzip, Encoding.UTF8);
-
-            value = reader.ReadToEnd();
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private static DateTimeOffset ConvertTimestamp(long timestamp)

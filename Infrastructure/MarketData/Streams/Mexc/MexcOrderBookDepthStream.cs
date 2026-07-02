@@ -1,149 +1,86 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.Mexc;
 
-public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
+public sealed class MexcOrderBookDepthStream : DepthStreamBase
 {
     private const string Connector = "mexc_perpetual";
-    private const string WsUrl = "wss://contract.mexc.com/edge";
     private const string Channel = "push.depth.step";
     private const string DepthStep = "10";
 
-    private readonly DepthSubscriptionTargetStore _targetStore;
     private readonly OrderBookDepthCache _depthCache;
     private readonly MexcContractMetadataStore _metadataStore;
     private readonly ILogger<MexcOrderBookDepthStream> _logger;
 
-    private readonly HashSet<string> _subscribedSymbols =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private SemaphoreSlim? _sendLock;
     private int _successfulUpdatesLogged;
-
-    public string ConnectorName => Connector;
 
     public MexcOrderBookDepthStream(
         DepthSubscriptionTargetStore targetStore,
         OrderBookDepthCache depthCache,
         MexcContractMetadataStore metadataStore,
         ILogger<MexcOrderBookDepthStream> logger)
+        : base(targetStore, depthCache, logger)
     {
-        _targetStore = targetStore;
         _depthCache = depthCache;
         _metadataStore = metadataStore;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "MEXC depth stream crashed. Reconnecting in 5 seconds...");
+    public override string ConnectorName => Connector;
 
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
+    protected override string WsUrl => "wss://contract.mexc.com/edge";
+
+    protected override int ReceiveBufferSize => 1024 * 512;
+
+    protected override void OnConnectionReset()
+    {
+        _successfulUpdatesLogged = 0;
+    }
+
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        MexcSymbolMapper.ToMexcSymbol(tradingPair);
+
+    protected override string MapExchangeSymbolToTradingPair(string exchangeSymbol) =>
+        MexcSymbolMapper.FromMexcSymbol(exchangeSymbol);
+
+    protected override async Task SubscribeAsync(
+        ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToAdd,
+        CancellationToken ct)
+    {
+        foreach (var symbol in symbolsToAdd)
+        {
+            await SendSubscriptionAsync(socket, "sub.depth.step", symbol, ct);
+
+            _logger.LogInformation(
+                "MEXC depth subscribe requested. Symbol={Symbol}, Total={Total}",
+                symbol,
+                SubscribedSymbolCount);
+
+            await Task.Delay(100, ct);
         }
     }
 
-    private async Task RunConnectionAsync(CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
-
-        _sendLock = new SemaphoreSlim(1, 1);
-        _subscribedSymbols.Clear();
-        _successfulUpdatesLogged = 0;
-
-        _logger.LogInformation("Connecting to MEXC depth stream: {Url}", WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation("Connected to MEXC depth stream.");
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, ct);
-        var subscriptionTask = SubscriptionLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, pingTask, subscriptionTask);
-    }
-
-    private async Task SubscriptionLoopAsync(
+    protected override async Task UnsubscribeAsync(
         ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToRemove,
         CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        foreach (var symbol in symbolsToRemove)
         {
-            var desiredSymbols = _targetStore
-                .GetPairsForConnector(Connector)
-                .Select(MexcSymbolMapper.ToMexcSymbol)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            await SendSubscriptionAsync(socket, "unsub.depth.step", symbol, ct);
 
-            var toSubscribe = desiredSymbols
-                .Except(_subscribedSymbols, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            _logger.LogInformation(
+                "MEXC depth unsubscribe requested. Symbol={Symbol}, Total={Total}",
+                symbol,
+                SubscribedSymbolCount);
 
-            var toUnsubscribe = _subscribedSymbols
-                .Except(desiredSymbols, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            foreach (var symbol in toSubscribe)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    method: "sub.depth.step",
-                    symbol,
-                    ct);
-
-                _subscribedSymbols.Add(symbol);
-
-                _logger.LogInformation(
-                    "MEXC depth subscribe requested. Symbol={Symbol}, Total={Total}",
-                    symbol,
-                    _subscribedSymbols.Count);
-
-                await Task.Delay(100, ct);
-            }
-
-            foreach (var symbol in toUnsubscribe)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    method: "unsub.depth.step",
-                    symbol,
-                    ct);
-
-                _subscribedSymbols.Remove(symbol);
-
-                _depthCache.Remove(
-                    Connector,
-                    MexcSymbolMapper.FromMexcSymbol(symbol));
-
-                _logger.LogInformation(
-                    "MEXC depth unsubscribe requested. Symbol={Symbol}, Total={Total}",
-                    symbol,
-                    _subscribedSymbols.Count);
-
-                await Task.Delay(100, ct);
-            }
-
-            await Task.Delay(1000, ct);
+            await Task.Delay(100, ct);
         }
     }
 
@@ -167,46 +104,10 @@ public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
         await SendTextAsync(socket, payload, ct);
     }
 
-    private async Task ReceiveLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
-    {
-        var buffer = new byte[1024 * 512];
+    protected override Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) =>
+        PingLoopAsync(socket, ct);
 
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-            {
-                break;
-            }
-
-            try
-            {
-                ProcessMessage(message);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse MEXC depth message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process MEXC depth message. Raw={Raw}",
-                    message);
-            }
-        }
-    }
-
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
+    private async Task PingLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested &&
                socket.State == WebSocketState.Open)
@@ -214,9 +115,7 @@ public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
             await Task.Delay(TimeSpan.FromSeconds(15), ct);
 
             if (socket.State != WebSocketState.Open)
-            {
                 break;
-            }
 
             var payload = JsonSerializer.Serialize(new
             {
@@ -227,40 +126,55 @@ public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
         }
     }
 
+    protected override async Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
+    {
+        try
+        {
+            ProcessMessage(json);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse MEXC depth message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process MEXC depth message. Raw={Raw}",
+                json);
+        }
+
+        await Task.CompletedTask;
+    }
+
     private void ProcessMessage(string json)
     {
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
 
         if (!TryGetStringProperty(root, "channel", out var channel))
-        {
             return;
-        }
 
         if (string.Equals(channel, "pong", StringComparison.OrdinalIgnoreCase))
-        {
             return;
-        }
 
         if (!string.Equals(channel, Channel, StringComparison.OrdinalIgnoreCase))
-        {
             return;
-        }
 
         if (!TryGetStringProperty(root, "symbol", out var symbol))
-        {
             return;
-        }
 
-        if (!_subscribedSymbols.Contains(symbol))
-        {
+        if (!IsSubscribed(symbol))
             return;
-        }
 
         if (!TryGetPropertyIgnoreCase(root, "data", out var dataElement))
-        {
             return;
-        }
 
         ProcessDepth(symbol, dataElement);
     }
@@ -270,14 +184,10 @@ public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
         JsonElement data)
     {
         if (!TryGetPropertyIgnoreCase(data, "bids", out var bidsElement))
-        {
             return;
-        }
 
         if (!TryGetPropertyIgnoreCase(data, "asks", out var asksElement))
-        {
             return;
-        }
 
         var contractSize = GetContractSize(symbol);
 
@@ -290,9 +200,7 @@ public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
             .ToList();
 
         if (bids.Count == 0 || asks.Count == 0)
-        {
             return;
-        }
 
         var receivedAt = DateTimeOffset.UtcNow;
 
@@ -341,30 +249,22 @@ public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
         decimal contractSize)
     {
         if (levelsElement.ValueKind != JsonValueKind.Array)
-        {
             return [];
-        }
 
         var result = new List<OrderBookDepthLevel>();
 
         foreach (var level in levelsElement.EnumerateArray())
         {
             if (level.ValueKind != JsonValueKind.Array)
-            {
                 continue;
-            }
 
             var values = level.EnumerateArray().ToList();
 
             if (values.Count < 2)
-            {
                 continue;
-            }
 
             if (!TryReadDecimal(values[0], out var price))
-            {
                 continue;
-            }
 
             // MEXC depth step level:
             // [price, orderCount, contractQuantity]
@@ -375,16 +275,12 @@ public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
                 : values[1];
 
             if (!TryReadDecimal(quantityElement, out var contractsAmount))
-            {
                 continue;
-            }
 
             var baseAmount = contractsAmount * contractSize;
 
             if (price <= 0 || baseAmount <= 0)
-            {
                 continue;
-            }
 
             result.Add(new OrderBookDepthLevel(
                 Price: price,
@@ -394,72 +290,10 @@ public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
         return result;
     }
 
-    private async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (_sendLock is null)
-        {
-            throw new InvalidOperationException("MEXC send lock is not initialized.");
-        }
-
-        await _sendLock.WaitAsync(ct);
-
-        try
-        {
-            if (socket.State != WebSocketState.Open)
-            {
-                return;
-            }
-
-            var bytes = Encoding.UTF8.GetBytes(payload);
-
-            await socket.SendAsync(
-                bytes,
-                WebSocketMessageType.Text,
-                endOfMessage: true,
-                cancellationToken: ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-            {
-                return null;
-            }
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-            {
-                break;
-            }
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
-    }
-
     private static DateTimeOffset ConvertTimestamp(long timestamp)
     {
         if (timestamp > 10_000_000_000)
-        {
             return DateTimeOffset.FromUnixTimeMilliseconds(timestamp);
-        }
 
         return DateTimeOffset.FromUnixTimeSeconds(timestamp);
     }
@@ -471,9 +305,7 @@ public sealed class MexcOrderBookDepthStream : IOrderBookDepthStream
         value = 0;
 
         if (element.ValueKind == JsonValueKind.Number)
-        {
             return element.TryGetDecimal(out value);
-        }
 
         if (element.ValueKind == JsonValueKind.String)
         {

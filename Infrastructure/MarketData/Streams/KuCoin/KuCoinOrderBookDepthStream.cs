@@ -1,148 +1,97 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.KuCoin;
 
-public sealed class KuCoinOrderBookDepthStream : IOrderBookDepthStream
+public sealed class KuCoinOrderBookDepthStream : DepthStreamBase
 {
     private const string Connector = "kucoin_perpetual";
 
     private readonly KuCoinFuturesWebSocketTokenProvider _tokenProvider;
-    private readonly DepthSubscriptionTargetStore _targetStore;
     private readonly OrderBookDepthCache _depthCache;
     private readonly ILogger<KuCoinOrderBookDepthStream> _logger;
 
-    private readonly HashSet<string> _subscribedSymbols =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private SemaphoreSlim? _sendLock;
+    private int _pingIntervalMs = 18000;
     private int _successfulUpdatesLogged;
-
-    public string ConnectorName => Connector;
 
     public KuCoinOrderBookDepthStream(
         KuCoinFuturesWebSocketTokenProvider tokenProvider,
         DepthSubscriptionTargetStore targetStore,
         OrderBookDepthCache depthCache,
         ILogger<KuCoinOrderBookDepthStream> logger)
+        : base(targetStore, depthCache, logger)
     {
         _tokenProvider = tokenProvider;
-        _targetStore = targetStore;
         _depthCache = depthCache;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "KuCoin depth stream crashed. Reconnecting in 5 seconds...");
+    public override string ConnectorName => Connector;
 
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
+    protected override int ReceiveBufferSize => 1024 * 256;
+
+    protected override void OnConnectionReset()
+    {
+        _successfulUpdatesLogged = 0;
     }
 
-    private async Task RunConnectionAsync(CancellationToken ct)
+    protected override void OnConnecting()
+    {
+        _logger.LogInformation("Connecting to KuCoin depth stream.");
+    }
+
+    protected override async Task<Uri> ResolveWebSocketUrlAsync(CancellationToken ct)
     {
         var connectionInfo = await _tokenProvider.GetConnectionInfoAsync(ct);
 
-        using var socket = new ClientWebSocket();
+        _pingIntervalMs = connectionInfo.PingIntervalMs;
 
-        _sendLock = new SemaphoreSlim(1, 1);
-        _subscribedSymbols.Clear();
-        _successfulUpdatesLogged = 0;
-
-        _logger.LogInformation("Connecting to KuCoin depth stream.");
-
-        await socket.ConnectAsync(new Uri(connectionInfo.WebSocketUrl), ct);
-
-        _logger.LogInformation("Connected to KuCoin depth stream.");
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var pingTask = PingLoopAsync(socket, connectionInfo.PingIntervalMs, ct);
-        var subscriptionTask = SubscriptionLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, pingTask, subscriptionTask);
+        return new Uri(connectionInfo.WebSocketUrl);
     }
 
-    private async Task SubscriptionLoopAsync(
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        KuCoinSymbolMapper.ToKuCoinSymbol(tradingPair);
+
+    protected override string MapExchangeSymbolToTradingPair(string exchangeSymbol) =>
+        KuCoinSymbolMapper.FromKuCoinSymbol(exchangeSymbol);
+
+    protected override async Task SubscribeAsync(
         ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToAdd,
         CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        foreach (var symbol in symbolsToAdd)
         {
-            var desiredSymbols = _targetStore
-                .GetPairsForConnector(Connector)
-                .Select(KuCoinSymbolMapper.ToKuCoinSymbol)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            await SendSubscriptionAsync(socket, "subscribe", symbol, ct);
 
-            var toSubscribe = desiredSymbols
-                .Except(_subscribedSymbols, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            _logger.LogInformation(
+                "KuCoin depth subscribe requested. Symbol={Symbol}, Total={Total}",
+                symbol,
+                SubscribedSymbolCount);
 
-            var toUnsubscribe = _subscribedSymbols
-                .Except(desiredSymbols, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            await Task.Delay(50, ct);
+        }
+    }
 
-            foreach (var symbol in toSubscribe)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    type: "subscribe",
-                    symbol,
-                    ct);
+    protected override async Task UnsubscribeAsync(
+        ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToRemove,
+        CancellationToken ct)
+    {
+        foreach (var symbol in symbolsToRemove)
+        {
+            await SendSubscriptionAsync(socket, "unsubscribe", symbol, ct);
 
-                _subscribedSymbols.Add(symbol);
+            _logger.LogInformation(
+                "KuCoin depth unsubscribe requested. Symbol={Symbol}, Total={Total}",
+                symbol,
+                SubscribedSymbolCount);
 
-                _logger.LogInformation(
-                    "KuCoin depth subscribe requested. Symbol={Symbol}, Total={Total}",
-                    symbol,
-                    _subscribedSymbols.Count);
-
-                await Task.Delay(50, ct);
-            }
-
-            foreach (var symbol in toUnsubscribe)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    type: "unsubscribe",
-                    symbol,
-                    ct);
-
-                _subscribedSymbols.Remove(symbol);
-
-                _depthCache.Remove(
-                    Connector,
-                    KuCoinSymbolMapper.FromKuCoinSymbol(symbol));
-
-                _logger.LogInformation(
-                    "KuCoin depth unsubscribe requested. Symbol={Symbol}, Total={Total}",
-                    symbol,
-                    _subscribedSymbols.Count);
-
-                await Task.Delay(50, ct);
-            }
-
-            await Task.Delay(1000, ct);
+            await Task.Delay(50, ct);
         }
     }
 
@@ -164,47 +113,12 @@ public sealed class KuCoinOrderBookDepthStream : IOrderBookDepthStream
         await SendTextAsync(socket, payload, ct);
     }
 
-    private async Task ReceiveLoopAsync(
-        ClientWebSocket socket,
-        CancellationToken ct)
+    protected override Task? RunPingLoopAsync(ClientWebSocket socket, CancellationToken ct) =>
+        PingLoopAsync(socket, ct);
+
+    private async Task PingLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
-        var buffer = new byte[1024 * 256];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
-        {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                ProcessMessage(message);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse KuCoin depth message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process KuCoin depth message. Raw={Raw}",
-                    message);
-            }
-        }
-    }
-
-    private async Task PingLoopAsync(
-        ClientWebSocket socket,
-        int pingIntervalMs,
-        CancellationToken ct)
-    {
-        var delayMs = Math.Max(5000, pingIntervalMs - 1000);
+        var delayMs = Math.Max(5000, _pingIntervalMs - 1000);
 
         while (!ct.IsCancellationRequested &&
                socket.State == WebSocketState.Open)
@@ -223,6 +137,33 @@ public sealed class KuCoinOrderBookDepthStream : IOrderBookDepthStream
 
             await SendTextAsync(socket, payload, ct);
         }
+    }
+
+    protected override async Task ProcessMessageAsync(
+        ClientWebSocket socket,
+        string json,
+        CancellationToken ct)
+    {
+        try
+        {
+            ProcessMessage(json);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse KuCoin depth message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process KuCoin depth message. Raw={Raw}",
+                json);
+        }
+
+        await Task.CompletedTask;
     }
 
     private void ProcessMessage(string json)
@@ -258,7 +199,7 @@ public sealed class KuCoinOrderBookDepthStream : IOrderBookDepthStream
         if (string.IsNullOrWhiteSpace(symbol))
             return;
 
-        if (!_subscribedSymbols.Contains(symbol))
+        if (!IsSubscribed(symbol))
             return;
 
         if (!TryGetPropertyIgnoreCase(root, "data", out var data))
@@ -347,35 +288,6 @@ public sealed class KuCoinOrderBookDepthStream : IOrderBookDepthStream
         return result;
     }
 
-    private async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (_sendLock is null)
-            throw new InvalidOperationException("KuCoin send lock is not initialized.");
-
-        await _sendLock.WaitAsync(ct);
-
-        try
-        {
-            if (socket.State != WebSocketState.Open)
-                return;
-
-            var bytes = Encoding.UTF8.GetBytes(payload);
-
-            await socket.SendAsync(
-                bytes,
-                WebSocketMessageType.Text,
-                endOfMessage: true,
-                cancellationToken: ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
     private static DateTimeOffset ConvertKuCoinTimestamp(long timestamp)
     {
         if (timestamp > 1_000_000_000_000_000)
@@ -385,29 +297,6 @@ public sealed class KuCoinOrderBookDepthStream : IOrderBookDepthStream
             return DateTimeOffset.FromUnixTimeMilliseconds(timestamp);
 
         return DateTimeOffset.FromUnixTimeSeconds(timestamp);
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        return Encoding.UTF8.GetString(memory.ToArray());
     }
 
     private static bool TryGetPropertyIgnoreCase(

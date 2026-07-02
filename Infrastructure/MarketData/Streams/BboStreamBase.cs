@@ -19,7 +19,7 @@ public abstract class BboStreamBase : WsStreamBase, IBestBidAskStream
     internal HashSet<string> AllowedSymbols { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
-    public Task StartAsync(
+    public virtual Task StartAsync(
         IReadOnlyList<string> tradingPairs,
         CancellationToken ct)
     {

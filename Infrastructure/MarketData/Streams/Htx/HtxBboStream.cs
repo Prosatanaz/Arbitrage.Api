@@ -1,34 +1,39 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Arbitrage.Api.Application.MarketData.Streaming;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.Htx;
 
-public sealed class HtxBboStream : IBestBidAskStream
+public sealed class HtxBboStream : BboStreamBase
 {
     private const string Connector = "htx_perpetual";
-    private const string WsUrl = "wss://api.hbdm.com/linear-swap-ws";
 
     private readonly BestBidAskCache _cache;
     private readonly ILogger<HtxBboStream> _logger;
 
     private int _successfulUpdatesLogged;
 
-    public string ConnectorName => Connector;
-
     public HtxBboStream(
         BestBidAskCache cache,
         ILogger<HtxBboStream> logger)
+        : base(logger)
     {
         _cache = cache;
         _logger = logger;
     }
 
-    public async Task StartAsync(
+    public override string ConnectorName => Connector;
+
+    protected override string WsUrl => "wss://api.hbdm.com/linear-swap-ws";
+
+    protected override int ReceiveBufferSize => 1024 * 256;
+
+    public override Task StartAsync(
         IReadOnlyList<string> tradingPairs,
         CancellationToken ct)
     {
@@ -42,62 +47,28 @@ public sealed class HtxBboStream : IBestBidAskStream
         if (pairs.Count == 0)
         {
             _logger.LogWarning("HTX BBO stream has no trading pairs to subscribe.");
-            return;
+            return Task.CompletedTask;
         }
 
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(pairs, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "HTX BBO stream crashed. Reconnecting in 5 seconds...");
-
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
+        return base.StartAsync(pairs, ct);
     }
 
-    private async Task RunConnectionAsync(
-        IReadOnlyList<string> tradingPairs,
-        CancellationToken ct)
+    protected override void OnConnecting()
     {
-        using var socket = new ClientWebSocket();
-
         _successfulUpdatesLogged = 0;
-
-        _logger.LogInformation(
-            "Connecting to HTX BBO stream: {Url}",
-            WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation(
-            "Connected to HTX BBO stream. Pairs={Pairs}",
-            tradingPairs.Count);
-
-        await SubscribeAsync(socket, tradingPairs, ct);
-
-        await ReceiveLoopAsync(socket, ct);
+        _logger.LogInformation("Connecting to HTX BBO stream: {Url}", WsUrl);
     }
 
-    private async Task SubscribeAsync(
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        HtxSymbolMapper.ToHtxContractCode(tradingPair);
+
+    protected override async Task SubscribeAsync(
         ClientWebSocket socket,
-        IReadOnlyList<string> tradingPairs,
+        IReadOnlyList<string> symbols,
         CancellationToken ct)
     {
-        foreach (var tradingPair in tradingPairs)
+        foreach (var contractCode in symbols)
         {
-            var contractCode = HtxSymbolMapper.ToHtxContractCode(tradingPair);
-
             var payload = JsonSerializer.Serialize(new
             {
                 sub = $"market.{contractCode}.bbo",
@@ -110,46 +81,56 @@ public sealed class HtxBboStream : IBestBidAskStream
 
         _logger.LogInformation(
             "HTX BBO subscribe requested. Count={Count}, Sample={Sample}",
-            tradingPairs.Count,
-            string.Join(", ", tradingPairs.Take(10)));
+            symbols.Count,
+            string.Join(", ", symbols.Take(10)));
     }
 
-    private async Task ReceiveLoopAsync(
+    protected override bool TryDecompress(
+        byte[] buffer,
+        int count,
+        WebSocketMessageType messageType,
+        out string text)
+    {
+        if (messageType == WebSocketMessageType.Binary)
+        {
+            using var compressed = new MemoryStream(buffer, 0, count);
+            using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
+            using var reader = new StreamReader(gzip, Encoding.UTF8);
+
+            text = reader.ReadToEnd();
+            return true;
+        }
+
+        text = Encoding.UTF8.GetString(buffer, 0, count);
+        return true;
+    }
+
+    protected override async Task ProcessMessageAsync(
         ClientWebSocket socket,
+        string json,
         CancellationToken ct)
     {
-        var buffer = new byte[1024 * 256];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        try
         {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                await ProcessMessageAsync(socket, message, ct);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse HTX BBO message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process HTX BBO message. Raw={Raw}",
-                    message);
-            }
+            await HandleMessageAsync(socket, json, ct);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse HTX BBO message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process HTX BBO message. Raw={Raw}",
+                json);
         }
     }
 
-    private async Task ProcessMessageAsync(
+    private async Task HandleMessageAsync(
         ClientWebSocket socket,
         string json,
         CancellationToken ct)
@@ -268,64 +249,6 @@ public sealed class HtxBboStream : IBestBidAskStream
 
         return TryReadDecimal(values[0], out price) &&
                TryReadDecimal(values[1], out amount);
-    }
-
-    private static async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (socket.State != WebSocketState.Open)
-            return;
-
-        var bytes = Encoding.UTF8.GetBytes(payload);
-
-        await socket.SendAsync(
-            bytes,
-            WebSocketMessageType.Text,
-            endOfMessage: true,
-            cancellationToken: ct);
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        WebSocketMessageType? messageType = null;
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            messageType ??= result.MessageType;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        var bytes = memory.ToArray();
-
-        if (messageType == WebSocketMessageType.Binary)
-            return DecompressGzip(bytes);
-
-        return Encoding.UTF8.GetString(bytes);
-    }
-
-    private static string DecompressGzip(byte[] bytes)
-    {
-        using var compressed = new MemoryStream(bytes);
-        using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
-        using var reader = new StreamReader(gzip, Encoding.UTF8);
-
-        return reader.ReadToEnd();
     }
 
     private static DateTimeOffset ConvertTimestamp(long timestamp)

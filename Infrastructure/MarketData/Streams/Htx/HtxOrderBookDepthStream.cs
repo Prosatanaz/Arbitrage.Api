@@ -1,154 +1,94 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.Htx;
 
-public sealed class HtxOrderBookDepthStream : IOrderBookDepthStream
+public sealed class HtxOrderBookDepthStream : DepthStreamBase
 {
     private const string Connector = "htx_perpetual";
-    private const string WsUrl = "wss://api.hbdm.com/linear-swap-ws";
     private const string DepthStep = "step6";
 
-    private readonly DepthSubscriptionTargetStore _targetStore;
     private readonly OrderBookDepthCache _depthCache;
     private readonly HtxContractMetadataStore _metadataStore;
     private readonly ILogger<HtxOrderBookDepthStream> _logger;
 
-    private readonly HashSet<string> _subscribedContracts =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private SemaphoreSlim? _sendLock;
     private int _successfulUpdatesLogged;
     private int _missingMetadataLogged;
-
-    public string ConnectorName => Connector;
 
     public HtxOrderBookDepthStream(
         DepthSubscriptionTargetStore targetStore,
         OrderBookDepthCache depthCache,
         HtxContractMetadataStore metadataStore,
         ILogger<HtxOrderBookDepthStream> logger)
+        : base(targetStore, depthCache, logger)
     {
-        _targetStore = targetStore;
         _depthCache = depthCache;
         _metadataStore = metadataStore;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "HTX depth stream crashed. Reconnecting in 5 seconds...");
+    public override string ConnectorName => Connector;
 
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
+    protected override string WsUrl => "wss://api.hbdm.com/linear-swap-ws";
+
+    protected override int ReceiveBufferSize => 1024 * 512;
+
+    protected override void OnConnectionReset()
+    {
+        _successfulUpdatesLogged = 0;
+        _missingMetadataLogged = 0;
+    }
+
+    protected override void OnConnecting()
+    {
+        _logger.LogInformation("Connecting to HTX depth stream: {Url}", WsUrl);
+    }
+
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        HtxSymbolMapper.ToHtxContractCode(tradingPair);
+
+    protected override string MapExchangeSymbolToTradingPair(string exchangeSymbol) =>
+        HtxSymbolMapper.FromHtxContractCode(exchangeSymbol);
+
+    protected override async Task SubscribeAsync(
+        ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToAdd,
+        CancellationToken ct)
+    {
+        foreach (var contractCode in symbolsToAdd.OrderBy(x => x))
+        {
+            await SendSubscriptionAsync(socket, "sub", contractCode, ct);
+
+            _logger.LogInformation(
+                "HTX depth subscribe requested. ContractCode={ContractCode}, Total={Total}",
+                contractCode,
+                SubscribedSymbolCount);
+
+            await Task.Delay(100, ct);
         }
     }
 
-    private async Task RunConnectionAsync(CancellationToken ct)
-    {
-        using var socket = new ClientWebSocket();
-
-        _sendLock = new SemaphoreSlim(1, 1);
-        _subscribedContracts.Clear();
-        _successfulUpdatesLogged = 0;
-        _missingMetadataLogged = 0;
-
-        _logger.LogInformation(
-            "Connecting to HTX depth stream: {Url}",
-            WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation("Connected to HTX depth stream.");
-
-        var receiveTask = ReceiveLoopAsync(socket, ct);
-        var subscriptionTask = SubscriptionLoopAsync(socket, ct);
-
-        await Task.WhenAny(receiveTask, subscriptionTask);
-    }
-
-    private async Task SubscriptionLoopAsync(
+    protected override async Task UnsubscribeAsync(
         ClientWebSocket socket,
+        IReadOnlyList<string> symbolsToRemove,
         CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        foreach (var contractCode in symbolsToRemove.OrderBy(x => x))
         {
-            var desiredContracts = _targetStore
-                .GetPairsForConnector(Connector)
-                .Select(HtxSymbolMapper.ToHtxContractCode)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            await SendSubscriptionAsync(socket, "unsub", contractCode, ct);
 
-            var toSubscribe = desiredContracts
-                .Except(_subscribedContracts, StringComparer.OrdinalIgnoreCase)
-                .OrderBy(x => x)
-                .ToList();
+            _logger.LogInformation(
+                "HTX depth unsubscribe requested. ContractCode={ContractCode}, Total={Total}",
+                contractCode,
+                SubscribedSymbolCount);
 
-            var toUnsubscribe = _subscribedContracts
-                .Except(desiredContracts, StringComparer.OrdinalIgnoreCase)
-                .OrderBy(x => x)
-                .ToList();
-
-            foreach (var contractCode in toSubscribe)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    operation: "sub",
-                    contractCode,
-                    ct);
-
-                _subscribedContracts.Add(contractCode);
-
-                _logger.LogInformation(
-                    "HTX depth subscribe requested. ContractCode={ContractCode}, Total={Total}",
-                    contractCode,
-                    _subscribedContracts.Count);
-
-                await Task.Delay(100, ct);
-            }
-
-            foreach (var contractCode in toUnsubscribe)
-            {
-                await SendSubscriptionAsync(
-                    socket,
-                    operation: "unsub",
-                    contractCode,
-                    ct);
-
-                _subscribedContracts.Remove(contractCode);
-
-                _depthCache.Remove(
-                    Connector,
-                    HtxSymbolMapper.FromHtxContractCode(contractCode));
-
-                _logger.LogInformation(
-                    "HTX depth unsubscribe requested. ContractCode={ContractCode}, Total={Total}",
-                    contractCode,
-                    _subscribedContracts.Count);
-
-                await Task.Delay(100, ct);
-            }
-
-            await Task.Delay(1000, ct);
+            await Task.Delay(100, ct);
         }
     }
 
@@ -167,42 +107,46 @@ public sealed class HtxOrderBookDepthStream : IOrderBookDepthStream
         await SendTextAsync(socket, payload, ct);
     }
 
-    private async Task ReceiveLoopAsync(
+    protected override bool TryDecompress(
+        byte[] buffer,
+        int count,
+        WebSocketMessageType messageType,
+        out string text)
+    {
+        using var compressed = new MemoryStream(buffer, 0, count);
+        using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
+        using var reader = new StreamReader(gzip, Encoding.UTF8);
+
+        text = reader.ReadToEnd();
+        return true;
+    }
+
+    protected override async Task ProcessMessageAsync(
         ClientWebSocket socket,
+        string json,
         CancellationToken ct)
     {
-        var buffer = new byte[1024 * 512];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        try
         {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                await ProcessMessageAsync(socket, message, ct);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse HTX depth message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process HTX depth message. Raw={Raw}",
-                    message);
-            }
+            await HandleMessageAsync(socket, json, ct);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse HTX depth message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process HTX depth message. Raw={Raw}",
+                json);
         }
     }
 
-    private async Task ProcessMessageAsync(
+    private async Task HandleMessageAsync(
         ClientWebSocket socket,
         string json,
         CancellationToken ct)
@@ -238,7 +182,7 @@ public sealed class HtxOrderBookDepthStream : IOrderBookDepthStream
             return;
         }
 
-        if (!_subscribedContracts.Contains(item.ContractCode))
+        if (!IsSubscribed(item.ContractCode))
             return;
 
         var bids = item.Bids
@@ -427,69 +371,6 @@ public sealed class HtxOrderBookDepthStream : IOrderBookDepthStream
         }
 
         return rawAmount;
-    }
-
-    private async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (_sendLock is null)
-            throw new InvalidOperationException("HTX send lock is not initialized.");
-
-        await _sendLock.WaitAsync(ct);
-
-        try
-        {
-            if (socket.State != WebSocketState.Open)
-                return;
-
-            var bytes = Encoding.UTF8.GetBytes(payload);
-
-            await socket.SendAsync(
-                bytes,
-                WebSocketMessageType.Text,
-                endOfMessage: true,
-                cancellationToken: ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        var bytes = memory.ToArray();
-
-        return DecompressGzip(bytes);
-    }
-
-    private static string DecompressGzip(byte[] bytes)
-    {
-        using var compressed = new MemoryStream(bytes);
-        using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
-        using var reader = new StreamReader(gzip, Encoding.UTF8);
-
-        return reader.ReadToEnd();
     }
 
     private static DateTimeOffset ConvertTimestamp(long timestamp)

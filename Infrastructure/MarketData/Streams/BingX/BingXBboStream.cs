@@ -1,34 +1,37 @@
-﻿using System.Globalization;
-using System.IO.Compression;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using Arbitrage.Api.Application.MarketData.Streaming;
 using Arbitrage.Api.Domain.MarketData;
+using Arbitrage.Api.Infrastructure.MarketData.Streams;
 
 namespace Arbitrage.Api.Infrastructure.MarketData.Streams.BingX;
 
-public sealed class BingXBboStream : IBestBidAskStream
+public sealed class BingXBboStream : BboStreamBase
 {
     private const string Connector = "bingx_perpetual";
-    private const string WsUrl = "wss://open-api-swap.bingx.com/swap-market";
 
     private readonly BestBidAskCache _cache;
     private readonly ILogger<BingXBboStream> _logger;
 
     private int _successfulUpdatesLogged;
 
-    public string ConnectorName => Connector;
-
     public BingXBboStream(
         BestBidAskCache cache,
         ILogger<BingXBboStream> logger)
+        : base(logger)
     {
         _cache = cache;
         _logger = logger;
     }
 
-    public async Task StartAsync(
+    public override string ConnectorName => Connector;
+
+    protected override string WsUrl => "wss://open-api-swap.bingx.com/swap-market";
+
+    protected override int ReceiveBufferSize => 1024 * 256;
+
+    public override Task StartAsync(
         IReadOnlyList<string> tradingPairs,
         CancellationToken ct)
     {
@@ -42,64 +45,30 @@ public sealed class BingXBboStream : IBestBidAskStream
         if (pairs.Count == 0)
         {
             _logger.LogWarning("BingX BBO stream has no trading pairs to subscribe.");
-            return;
+            return Task.CompletedTask;
         }
 
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RunConnectionAsync(pairs, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "BingX BBO stream crashed. Reconnecting in 5 seconds...");
-
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            }
-        }
+        return base.StartAsync(pairs, ct);
     }
 
-    private async Task RunConnectionAsync(
-        IReadOnlyList<string> tradingPairs,
-        CancellationToken ct)
+    protected override void OnConnecting()
     {
-        using var socket = new ClientWebSocket();
-
         _successfulUpdatesLogged = 0;
-
-        _logger.LogInformation(
-            "Connecting to BingX BBO stream: {Url}",
-            WsUrl);
-
-        await socket.ConnectAsync(new Uri(WsUrl), ct);
-
-        _logger.LogInformation(
-            "Connected to BingX BBO stream. Pairs={Pairs}",
-            tradingPairs.Count);
-
-        await SubscribeAsync(socket, tradingPairs, ct);
-
-        await ReceiveLoopAsync(socket, ct);
+        _logger.LogInformation("Connecting to BingX BBO stream: {Url}", WsUrl);
     }
 
-    private async Task SubscribeAsync(
+    protected override string MapTradingPairToExchangeSymbol(string tradingPair) =>
+        BingXSymbolMapper.ToBingXSymbol(tradingPair);
+
+    protected override async Task SubscribeAsync(
         ClientWebSocket socket,
-        IReadOnlyList<string> tradingPairs,
+        IReadOnlyList<string> symbols,
         CancellationToken ct)
     {
         var total = 0;
 
-        foreach (var tradingPair in tradingPairs)
+        foreach (var symbol in symbols)
         {
-            var symbol = BingXSymbolMapper.ToBingXSymbol(tradingPair);
-
             var payload = JsonSerializer.Serialize(new
             {
                 id = $"bbo-{symbol}",
@@ -124,46 +93,52 @@ public sealed class BingXBboStream : IBestBidAskStream
 
         _logger.LogInformation(
             "BingX BBO subscribe completed. Count={Count}, Sample={Sample}",
-            tradingPairs.Count,
-            string.Join(", ", tradingPairs.Take(10)));
+            symbols.Count,
+            string.Join(", ", symbols.Take(10)));
     }
 
-    private async Task ReceiveLoopAsync(
+    protected override bool TryDecompress(
+        byte[] buffer,
+        int count,
+        WebSocketMessageType messageType,
+        out string text)
+    {
+        if (GzipTextDecoder.TryDecompress(buffer, count, out var decompressed))
+        {
+            text = decompressed;
+            return true;
+        }
+
+        text = System.Text.Encoding.UTF8.GetString(buffer, 0, count);
+        return true;
+    }
+
+    protected override async Task ProcessMessageAsync(
         ClientWebSocket socket,
+        string json,
         CancellationToken ct)
     {
-        var buffer = new byte[1024 * 256];
-
-        while (!ct.IsCancellationRequested &&
-               socket.State == WebSocketState.Open)
+        try
         {
-            var message = await ReceiveTextAsync(socket, buffer, ct);
-
-            if (message is null)
-                break;
-
-            try
-            {
-                await ProcessMessageAsync(socket, message, ct);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to parse BingX BBO message. Raw={Raw}",
-                    message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to process BingX BBO message. Raw={Raw}",
-                    message);
-            }
+            await HandleMessageAsync(socket, json, ct);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to parse BingX BBO message. Raw={Raw}",
+                json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to process BingX BBO message. Raw={Raw}",
+                json);
         }
     }
 
-    private async Task ProcessMessageAsync(
+    private async Task HandleMessageAsync(
         ClientWebSocket socket,
         string json,
         CancellationToken ct)
@@ -254,10 +229,11 @@ public sealed class BingXBboStream : IBestBidAskStream
 
         return TryExtractBboFromObject(root, root, out item);
     }
+
     private static bool TryExtractBboFromDepth(
         JsonElement source,
         JsonElement root,
-    out BingXBboItem item)
+        out BingXBboItem item)
     {
         item = default;
 
@@ -314,6 +290,7 @@ public sealed class BingXBboStream : IBestBidAskStream
 
         return true;
     }
+
     private static bool TryReadFirstDepthLevel(
         JsonElement levels,
         out decimal price,
@@ -466,78 +443,6 @@ public sealed class BingXBboStream : IBestBidAskStream
         symbol = dataType[..atIndex].Trim().ToUpperInvariant();
 
         return !string.IsNullOrWhiteSpace(symbol);
-    }
-
-    private static async Task SendTextAsync(
-        ClientWebSocket socket,
-        string payload,
-        CancellationToken ct)
-    {
-        if (socket.State != WebSocketState.Open)
-            return;
-
-        var bytes = Encoding.UTF8.GetBytes(payload);
-
-        await socket.SendAsync(
-            bytes,
-            WebSocketMessageType.Text,
-            endOfMessage: true,
-            cancellationToken: ct);
-    }
-
-    private static async Task<string?> ReceiveTextAsync(
-        ClientWebSocket socket,
-        byte[] buffer,
-        CancellationToken ct)
-    {
-        using var memory = new MemoryStream();
-
-        WebSocketMessageType? messageType = null;
-
-        while (true)
-        {
-            var result = await socket.ReceiveAsync(buffer, ct);
-
-            if (result.MessageType == WebSocketMessageType.Close)
-                return null;
-
-            messageType ??= result.MessageType;
-
-            memory.Write(buffer, 0, result.Count);
-
-            if (result.EndOfMessage)
-                break;
-        }
-
-        var bytes = memory.ToArray();
-
-        if (TryDecompressGzip(bytes, out var decompressed))
-            return decompressed;
-
-        
-
-        return Encoding.UTF8.GetString(bytes);
-    }
-
-    private static bool TryDecompressGzip(
-        byte[] bytes,
-        out string value)
-    {
-        value = "";
-
-        try
-        {
-            using var compressed = new MemoryStream(bytes);
-            using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
-            using var reader = new StreamReader(gzip, Encoding.UTF8);
-
-            value = reader.ReadToEnd();
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private static DateTimeOffset ConvertTimestamp(long timestamp)
