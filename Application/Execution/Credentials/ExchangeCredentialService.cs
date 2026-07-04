@@ -1,20 +1,34 @@
-﻿using Arbitrage.Api.Application.Execution;
-using Microsoft.Extensions.Options;
-
-namespace Arbitrage.Api.Application.Execution.Credentials;
+﻿namespace Arbitrage.Api.Application.Execution.Credentials;
 
 public sealed class ExchangeCredentialService
 {
-    private readonly ExecutionOptions _executionOptions;
+    /// <summary>
+    /// Every connector credentials can be configured for, independent of which connectors are
+    /// currently allowed to place real orders (<see cref="Arbitrage.Api.Application.Execution.ExecutionOptions.EnabledConnectors"/>).
+    /// Keeping these separate lets operators pre-configure keys for an exchange before its
+    /// trading client is implemented.
+    /// </summary>
+    public static readonly IReadOnlyList<string> AllConnectors = new[]
+    {
+        "binance_perpetual",
+        "bybit_perpetual",
+        "okx_perpetual",
+        "bitget_perpetual",
+        "gate_io_perpetual",
+        "kucoin_perpetual",
+        "mexc_perpetual",
+        "bitmart_perpetual",
+        "htx_perpetual",
+        "bingx_perpetual",
+    };
+
     private readonly IExchangeApiCredentialsRepository _repository;
     private readonly ApiSecretProtector _secretProtector;
 
     public ExchangeCredentialService(
-        IOptions<ExecutionOptions> executionOptions,
         IExchangeApiCredentialsRepository repository,
         ApiSecretProtector secretProtector)
     {
-        _executionOptions = executionOptions.Value;
         _repository = repository;
         _secretProtector = secretProtector;
     }
@@ -28,7 +42,7 @@ public sealed class ExchangeCredentialService
             x => x.ConnectorName,
             StringComparer.OrdinalIgnoreCase);
 
-        var connectors = _executionOptions.EnabledConnectors
+        var connectors = AllConnectors
             .Concat(byConnector.Keys)
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(NormalizeConnectorName)
@@ -146,7 +160,7 @@ public sealed class ExchangeCredentialService
     {
         var normalizedConnectorName = NormalizeConnectorName(connectorName);
 
-        return _executionOptions.EnabledConnectors.Contains(
+        return AllConnectors.Contains(
             normalizedConnectorName,
             StringComparer.OrdinalIgnoreCase);
     }

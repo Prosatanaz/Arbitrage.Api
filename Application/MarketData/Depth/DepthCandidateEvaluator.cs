@@ -122,6 +122,80 @@ public sealed class DepthCandidateEvaluator
                 "Buy-side depth snapshot is missing.");
         }
 
+        var bestAsk = buyDepth.BestAskPrice;
+
+        if (bestAsk <= 0)
+        {
+            return Empty(
+                candidate,
+                request,
+                DepthCandidateValidationStatus.MissingBuyDepth,
+                "Buy-side best ask is invalid.");
+        }
+
+        var requestedBaseAmount = request.NotionalUsd / bestAsk;
+
+        return EvaluateWithBaseAmount(
+            candidate,
+            requestedBaseAmount,
+            request,
+            now,
+            maxDepthAge);
+    }
+
+    /// <summary>
+    /// Evaluates the current live net edge for a specific already-open position (known pair,
+    /// connectors and base quantity) rather than deriving the size from a tracked candidate's
+    /// notional - used by the carry-trade position monitor to decide when to close.
+    /// </summary>
+    public ValidatedDepthCandidate EvaluateForOpenPosition(
+        string tradingPair,
+        string longConnector,
+        string shortConnector,
+        decimal baseQuantity,
+        EvaluateDepthCandidatesRequest request)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var maxDepthAge = TimeSpan.FromMilliseconds(request.MaxDepthAgeMs);
+
+        var syntheticCandidate = new SpreadCandidate(
+            TradingPair: tradingPair,
+            LongConnector: longConnector,
+            ShortConnector: shortConnector,
+            BuyPrice: 0m,
+            SellPrice: 0m,
+            GrossSpread: 0m,
+            GrossSpreadPct: 0m,
+            DetectedAt: now);
+
+        return EvaluateWithBaseAmount(
+            syntheticCandidate,
+            baseQuantity,
+            request,
+            now,
+            maxDepthAge);
+    }
+
+    private ValidatedDepthCandidate EvaluateWithBaseAmount(
+        SpreadCandidate candidate,
+        decimal requestedBaseAmount,
+        EvaluateDepthCandidatesRequest request,
+        DateTimeOffset now,
+        TimeSpan maxDepthAge)
+    {
+        if (!_depthCache.TryGet(
+                candidate.LongConnector,
+                candidate.TradingPair,
+                out var buyDepth) ||
+            buyDepth is null)
+        {
+            return Empty(
+                candidate,
+                request,
+                DepthCandidateValidationStatus.MissingBuyDepth,
+                "Buy-side depth snapshot is missing.");
+        }
+
         if (!_depthCache.TryGet(
                 candidate.ShortConnector,
                 candidate.TradingPair,
@@ -170,19 +244,6 @@ public sealed class DepthCandidateEvaluator
                 DepthCandidateValidationStatus.MissingSellDepth,
                 "Sell-side bids are empty.");
         }
-
-        var bestAsk = buyDepth.BestAskPrice;
-
-        if (bestAsk <= 0)
-        {
-            return Empty(
-                candidate,
-                request,
-                DepthCandidateValidationStatus.MissingBuyDepth,
-                "Buy-side best ask is invalid.");
-        }
-
-        var requestedBaseAmount = request.NotionalUsd / bestAsk;
 
         var buyQuote = CalculateBuyQuote(
             buyDepth.Asks,

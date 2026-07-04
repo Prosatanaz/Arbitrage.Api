@@ -21,4 +21,16 @@ public sealed class ExecutionOptions
     public bool RequireOneShotArm { get; init; } = true;
 
     public string[] EnabledConnectors { get; init; } = [];
+
+    public decimal MinEntryNetEdgePct { get; init; } = 0.2m;
+
+    public decimal ExitNetEdgePct { get; init; } = 0.05m;
+
+    public int MaxHoldMinutes { get; init; } = 720;
+
+    public int EntryPollIntervalMs { get; init; } = 1000;
+
+    public int ExitPollIntervalMs { get; init; } = 1000;
+
+    public int ExitConfirmSamples { get; init; } = 3;
 }

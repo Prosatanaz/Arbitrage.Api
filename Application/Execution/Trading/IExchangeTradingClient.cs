@@ -21,6 +21,11 @@ public interface IExchangeTradingClient
     Task<ExchangeSymbolRules?> GetSymbolRulesAsync(
         string tradingPair,
         CancellationToken ct);
+
+    Task<OrderFillResult> PlaceOrderAsync(
+        ExchangeApiCredentialSecret credentials,
+        PlaceOrderRequest request,
+        CancellationToken ct);
 }
 
 public sealed record ExchangeConnectionCheckResult(
@@ -29,3 +34,21 @@ public sealed record ExchangeConnectionCheckResult(
     string Status,
     string? Error,
     DateTimeOffset CheckedAt);
+
+public sealed record PlaceOrderRequest(
+    string TradingPair,
+    string Side,
+    decimal Quantity,
+    bool ReduceOnly,
+    string ClientOrderId);
+
+public sealed record OrderFillResult(
+    string ConnectorName,
+    string ClientOrderId,
+    string ExchangeOrderId,
+    bool IsFilled,
+    decimal FilledQuantity,
+    decimal AverageFillPrice,
+    decimal FeePaidUsd,
+    string Status,
+    DateTimeOffset FilledAt);

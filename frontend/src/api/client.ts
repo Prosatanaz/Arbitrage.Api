@@ -2,7 +2,9 @@ import type {
     ActiveSignalsResponse,
     ActiveSignalsSummaryResponse,
     AnalyticsSummaryResponse,
+    CarryTradeItem,
     DepthIssueItem,
+    RealizedSummaryResponse,
     SystemHealthResponse,
     TopOpportunityItem,
 } from './types';
@@ -36,4 +38,18 @@ export const api = {
 
     depthIssues: (hours = 12, limit = 10) =>
         getJson<DepthIssueItem[]>(`/api/analytics/opportunities/depth-issues?hours=${hours}&limit=${limit}`),
+
+    carryTrades: (hours = 168, limit = 20) =>
+        getJson<CarryTradeItem[]>(`/api/execution/trades?hours=${hours}&limit=${limit}`),
+
+    realizedSummary: (hours = 168) =>
+        getJson<RealizedSummaryResponse>(`/api/analytics/opportunities/realized/summary?hours=${hours}`),
+
+    closeTrade: (id: string) =>
+        fetch(`/api/execution/trades/${id}/close`, { method: 'POST' }).then((response) => {
+            if (!response.ok) {
+                throw new Error(`${response.status} ${response.statusText}`);
+            }
+            return response.json();
+        }),
 };

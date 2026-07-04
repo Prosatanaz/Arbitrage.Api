@@ -118,8 +118,146 @@ public sealed class BybitTradingClient : IExchangeTradingClient
         return Task.FromResult(result);
     }
 
-    // PlaceOrderAsync is intentionally not implemented yet. When added, round price/qty
-    // via OrderSizeRounding using these rules and attach orderLinkId for retry idempotency.
+    public async Task<OrderFillResult> PlaceOrderAsync(
+        ExchangeApiCredentialSecret credentials,
+        PlaceOrderRequest request,
+        CancellationToken ct)
+    {
+        var exchangeSymbol = ToBybitSymbol(request.TradingPair);
+
+        if (string.IsNullOrWhiteSpace(exchangeSymbol))
+        {
+            throw new InvalidOperationException(
+                $"Bybit symbol could not be derived for trading pair '{request.TradingPair}'.");
+        }
+
+        var body = JsonSerializer.Serialize(new
+        {
+            category = _options.Category,
+            symbol = exchangeSymbol,
+            side = request.Side,
+            orderType = "Market",
+            qty = request.Quantity.ToString(CultureInfo.InvariantCulture),
+            reduceOnly = request.ReduceOnly,
+            timeInForce = "IOC",
+            orderLinkId = request.ClientOrderId
+        });
+
+        var response = await SendSignedPostAsync<BybitOrderCreateResponse>(
+            path: "v5/order/create",
+            body: body,
+            credentials: credentials,
+            ct: ct);
+
+        var orderId = response.Result?.OrderId ?? "";
+
+        var executions = await GetExecutionsWithRetryAsync(
+            exchangeSymbol,
+            orderId,
+            credentials,
+            ct);
+
+        var filledQuantity = executions.Sum(x => ParseDecimal(x.ExecQty));
+        var filledNotional = executions.Sum(x => ParseDecimal(x.ExecQty) * ParseDecimal(x.ExecPrice));
+        var feePaid = executions.Sum(x => ParseDecimal(x.ExecFee));
+        var averagePrice = filledQuantity > 0 ? filledNotional / filledQuantity : 0m;
+
+        return new OrderFillResult(
+            ConnectorName: ConnectorName,
+            ClientOrderId: request.ClientOrderId,
+            ExchangeOrderId: orderId,
+            IsFilled: filledQuantity > 0,
+            FilledQuantity: filledQuantity,
+            AverageFillPrice: averagePrice,
+            FeePaidUsd: feePaid,
+            Status: filledQuantity >= request.Quantity ? "Filled" : filledQuantity > 0 ? "PartiallyFilled" : "Unfilled",
+            FilledAt: DateTimeOffset.UtcNow);
+    }
+
+    private async Task<List<BybitExecution>> GetExecutionsWithRetryAsync(
+        string exchangeSymbol,
+        string orderId,
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var queryString =
+                $"category={Uri.EscapeDataString(_options.Category)}&symbol={Uri.EscapeDataString(exchangeSymbol)}&orderId={Uri.EscapeDataString(orderId)}";
+
+            var response = await SendSignedGetAsync<BybitExecutionListResponse>(
+                path: "v5/execution/list",
+                queryString: queryString,
+                credentials: credentials,
+                ct: ct);
+
+            var executions = response.Result?.List ?? [];
+
+            if (executions.Count > 0)
+                return executions;
+
+            await Task.Delay(200, ct);
+        }
+
+        return [];
+    }
+
+    private async Task<T> SendSignedPostAsync<T>(
+        string path,
+        string body,
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        var timestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+        var recvWindow = _options.RecvWindowMs.ToString(CultureInfo.InvariantCulture);
+
+        var signature = _signer.SignGet(
+            timestampMs,
+            credentials.ApiKey,
+            credentials.ApiSecret,
+            recvWindow,
+            body);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            path);
+
+        request.Headers.TryAddWithoutValidation("X-BAPI-API-KEY", credentials.ApiKey);
+        request.Headers.TryAddWithoutValidation("X-BAPI-TIMESTAMP", timestampMs);
+        request.Headers.TryAddWithoutValidation("X-BAPI-RECV-WINDOW", recvWindow);
+        request.Headers.TryAddWithoutValidation("X-BAPI-SIGN", signature);
+        request.Content = new StringContent(
+            body,
+            System.Text.Encoding.UTF8,
+            "application/json");
+
+        using var response = await _httpClient.SendAsync(
+            request,
+            ct);
+
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"Bybit HTTP request failed. StatusCode={(int)response.StatusCode}, Body={responseBody}");
+        }
+
+        var parsed = JsonSerializer.Deserialize<T>(
+            responseBody,
+            JsonOptions);
+
+        if (parsed is null)
+        {
+            throw new InvalidOperationException(
+                "Bybit response deserialization failed.");
+        }
+
+        ValidateBybitEnvelope(parsed, responseBody);
+
+        return parsed;
+    }
+
     public async Task<ExchangeSymbolRules?> GetSymbolRulesAsync(
         string tradingPair,
         CancellationToken ct)
@@ -341,6 +479,45 @@ public sealed class BybitTradingClient : IExchangeTradingClient
         public string? UsdValue { get; set; }
 
         public string? UnrealisedPnl { get; set; }
+    }
+
+    private sealed class BybitOrderCreateResponse : IBybitResponseEnvelope
+    {
+        public int RetCode { get; set; }
+
+        public string RetMsg { get; set; } = "";
+
+        public BybitOrderCreateResult? Result { get; set; }
+    }
+
+    private sealed class BybitOrderCreateResult
+    {
+        public string? OrderId { get; set; }
+
+        public string? OrderLinkId { get; set; }
+    }
+
+    private sealed class BybitExecutionListResponse : IBybitResponseEnvelope
+    {
+        public int RetCode { get; set; }
+
+        public string RetMsg { get; set; } = "";
+
+        public BybitExecutionListResult? Result { get; set; }
+    }
+
+    private sealed class BybitExecutionListResult
+    {
+        public List<BybitExecution>? List { get; set; }
+    }
+
+    private sealed class BybitExecution
+    {
+        public string? ExecQty { get; set; }
+
+        public string? ExecPrice { get; set; }
+
+        public string? ExecFee { get; set; }
     }
 
     private sealed class BybitInstrumentsInfoResponse : IBybitResponseEnvelope

@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Arbitrage.Api.Application.Execution;
+using Arbitrage.Api.Application.Execution.CarryTrades;
 using Arbitrage.Api.Application.Execution.Credentials;
 using Arbitrage.Api.Application.Execution.Trading;
 using Arbitrage.Api.Application.Instruments;
@@ -9,8 +10,16 @@ using Arbitrage.Api.Application.MarketData.Streaming;
 using Arbitrage.Api.Application.MarketData.Universe;
 using Arbitrage.Api.Application.Persistence;
 using Arbitrage.Api.Application.SignalQuality;
+using Arbitrage.Api.Infrastructure.Execution.Trading.Binance;
+using Arbitrage.Api.Infrastructure.Execution.Trading.BingX;
+using Arbitrage.Api.Infrastructure.Execution.Trading.Bitget;
+using Arbitrage.Api.Infrastructure.Execution.Trading.BitMart;
 using Arbitrage.Api.Infrastructure.Execution.Trading.Bybit;
+using Arbitrage.Api.Infrastructure.Execution.Trading.GateIo;
 using Arbitrage.Api.Infrastructure.Execution.Trading.Htx;
+using Arbitrage.Api.Infrastructure.Execution.Trading.KuCoin;
+using Arbitrage.Api.Infrastructure.Execution.Trading.Mexc;
+using Arbitrage.Api.Infrastructure.Execution.Trading.Okx;
 using Arbitrage.Api.Infrastructure.HostedServices;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.Binance;
 using Arbitrage.Api.Infrastructure.MarketData.Streams.BingX;
@@ -122,6 +131,86 @@ builder.Services.AddHttpClient<BybitTradingClient>();
 builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
     sp.GetRequiredService<BybitTradingClient>());
 
+builder.Services.Configure<BinanceTradingOptions>(
+    builder.Configuration.GetSection(BinanceTradingOptions.SectionName));
+
+builder.Services.AddSingleton<BinanceAuthSigner>();
+
+builder.Services.AddHttpClient<BinanceTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<BinanceTradingClient>());
+
+builder.Services.Configure<OkxTradingOptions>(
+    builder.Configuration.GetSection(OkxTradingOptions.SectionName));
+
+builder.Services.AddSingleton<OkxAuthSigner>();
+
+builder.Services.AddHttpClient<OkxTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<OkxTradingClient>());
+
+builder.Services.Configure<BitgetTradingOptions>(
+    builder.Configuration.GetSection(BitgetTradingOptions.SectionName));
+
+builder.Services.AddSingleton<BitgetAuthSigner>();
+
+builder.Services.AddHttpClient<BitgetTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<BitgetTradingClient>());
+
+builder.Services.Configure<GateIoTradingOptions>(
+    builder.Configuration.GetSection(GateIoTradingOptions.SectionName));
+
+builder.Services.AddSingleton<GateIoAuthSigner>();
+
+builder.Services.AddHttpClient<GateIoTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<GateIoTradingClient>());
+
+builder.Services.Configure<KuCoinTradingOptions>(
+    builder.Configuration.GetSection(KuCoinTradingOptions.SectionName));
+
+builder.Services.AddSingleton<KuCoinAuthSigner>();
+
+builder.Services.AddHttpClient<KuCoinTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<KuCoinTradingClient>());
+
+builder.Services.Configure<MexcTradingOptions>(
+    builder.Configuration.GetSection(MexcTradingOptions.SectionName));
+
+builder.Services.AddSingleton<MexcAuthSigner>();
+
+builder.Services.AddHttpClient<MexcTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<MexcTradingClient>());
+
+builder.Services.Configure<BitMartTradingOptions>(
+    builder.Configuration.GetSection(BitMartTradingOptions.SectionName));
+
+builder.Services.AddSingleton<BitMartAuthSigner>();
+
+builder.Services.AddHttpClient<BitMartTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<BitMartTradingClient>());
+
+builder.Services.Configure<BingXTradingOptions>(
+    builder.Configuration.GetSection(BingXTradingOptions.SectionName));
+
+builder.Services.AddSingleton<BingXAuthSigner>();
+
+builder.Services.AddHttpClient<BingXTradingClient>();
+
+builder.Services.AddSingleton<IExchangeTradingClient>(sp =>
+    sp.GetRequiredService<BingXTradingClient>());
+
 // -----------------------------------------------------------------------------
 // Trading pair universe discovery / refresh
 // -----------------------------------------------------------------------------
@@ -204,6 +293,17 @@ builder.Services.AddSingleton<ExecutionGateService>();
 
 builder.Services.AddHostedService<ExecutionSchemaInitializer>();
 builder.Services.AddHostedService<ExecutionStartupSafetyHostedService>();
+
+// -----------------------------------------------------------------------------
+// Carry trades (real two-leg open/close execution)
+// -----------------------------------------------------------------------------
+
+builder.Services.AddSingleton<ICarryTradeRepository, PostgresCarryTradeRepository>();
+builder.Services.AddSingleton<CarryTradeLegExecutor>();
+
+builder.Services.AddHostedService<CarryTradeSchemaInitializer>();
+builder.Services.AddHostedService<CarryTradeEntryWorker>();
+builder.Services.AddHostedService<CarryTradePositionMonitorWorker>();
 
 builder.Services.AddHttpClient<BitMartPerpetualTradingPairDiscoveryClient>(
     client =>

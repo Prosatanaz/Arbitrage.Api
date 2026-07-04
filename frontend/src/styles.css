@@ -53,6 +53,161 @@ button {
     padding: 2rem 0 3rem;
 }
 
+.nav-tabs {
+    width: min(1660px, calc(100vw - 48px));
+    margin: 0 auto;
+    padding-top: 1.5rem;
+    display: flex;
+    gap: 0.5rem;
+}
+
+.nav-tab {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 999px;
+    padding: 0.5rem 1.1rem;
+    background: rgba(15, 23, 42, 0.55);
+    color: #cbd5e1;
+    font-weight: 800;
+    font-size: 0.86rem;
+    cursor: pointer;
+}
+
+.nav-tab--active {
+    color: #ffffff;
+    background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+    border-color: rgba(147, 197, 253, 0.55);
+}
+
+.connectors-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 1rem;
+}
+
+.connector-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+
+.connector-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.connector-card__name {
+    color: #ffffff;
+    font-weight: 950;
+    font-size: 1.02rem;
+    letter-spacing: -0.01em;
+}
+
+.connector-card__meta {
+    color: #94a3b8;
+    font-size: 0.82rem;
+    margin-top: 0.25rem;
+}
+
+.connector-card__badges {
+    display: flex;
+    gap: 0.4rem;
+    flex-shrink: 0;
+}
+
+.connector-card__status {
+    color: #cbd5e1;
+    font-size: 0.82rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    padding-top: 0.75rem;
+}
+
+.connector-card__error {
+    color: #fca5a5;
+    margin-top: 0.3rem;
+}
+
+.connector-card__actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.connector-card__message {
+    color: #bfdbfe;
+    font-size: 0.85rem;
+}
+
+.field-grid {
+    display: grid;
+    gap: 0.65rem;
+}
+
+.execution-controls__status {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.75rem;
+    margin: 0.75rem 0 1rem;
+}
+
+.execution-controls__stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.execution-controls__stat span:first-child {
+    color: #94a3b8;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.execution-controls__stat--wide {
+    grid-column: 1 / -1;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    color: #cbd5e1;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.field input[type="text"],
+.field input[type="password"] {
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 10px;
+    padding: 0.55rem 0.7rem;
+    background: rgba(8, 17, 31, 0.7);
+    color: #f8fafc;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+    .field input[type="text"]:focus,
+    .field input[type="password"]:focus {
+        outline: none;
+        border-color: rgba(147, 197, 253, 0.72);
+    }
+
+.field--checkbox {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+button.button--danger {
+    border-color: rgba(239, 68, 68, 0.4);
+}
+
+    button.button--danger:hover {
+        border-color: rgba(248, 113, 113, 0.75);
+    }
+
 .header {
     display: flex;
     justify-content: space-between;

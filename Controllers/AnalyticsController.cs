@@ -349,6 +349,42 @@ public sealed class AnalyticsController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("realized/summary")]
+    public async Task<IActionResult> RealizedSummary(
+        [FromQuery] int hours = 168,
+        CancellationToken ct = default)
+    {
+        if (PostgresDisabled() is { } disabled)
+            return disabled;
+
+        var safeHours = Math.Clamp(hours, 1, 24 * 30);
+
+        const string sql = """
+        select
+            count(*) as "TradesCount",
+            coalesce(round(sum(realized_pnl_usd), 6), 0) as "TotalRealizedPnlUsd",
+            coalesce(round(avg(realized_pnl_usd), 6), 0) as "AvgRealizedPnlUsd",
+            coalesce(round(
+                count(*) filter (where realized_pnl_usd > 0) * 100.0 / nullif(count(*), 0),
+                2), 0) as "WinRatePct",
+            coalesce(round(avg(extract(epoch from (closed_at - opened_at)) / 60.0), 2), 0) as "AvgHoldMinutes",
+            max(closed_at) as "LastClosedAt"
+        from carry_trades
+        where status = 'Closed'
+          and closed_at >= now() - (@Hours * interval '1 hour');
+        """;
+
+        await using var connection = await OpenConnectionAsync(ct);
+
+        var result = await connection.QuerySingleAsync<RealizedSummaryRow>(
+            new CommandDefinition(
+                sql,
+                new { Hours = safeHours },
+                cancellationToken: ct));
+
+        return Ok(result);
+    }
+
     [HttpGet("depth-issues")]
     public async Task<IActionResult> DepthIssues(
         [FromQuery] int hours = 12,
@@ -706,5 +742,20 @@ public sealed class AnalyticsController : ControllerBase
         public string Status { get; set; } = "";
 
         public long Rows { get; set; }
+    }
+
+    private sealed class RealizedSummaryRow
+    {
+        public long TradesCount { get; set; }
+
+        public decimal TotalRealizedPnlUsd { get; set; }
+
+        public decimal AvgRealizedPnlUsd { get; set; }
+
+        public decimal WinRatePct { get; set; }
+
+        public decimal AvgHoldMinutes { get; set; }
+
+        public DateTimeOffset? LastClosedAt { get; set; }
     }
 }

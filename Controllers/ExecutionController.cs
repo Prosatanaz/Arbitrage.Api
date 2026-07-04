@@ -1,4 +1,5 @@
 ﻿using Arbitrage.Api.Application.Execution;
+using Arbitrage.Api.Application.Execution.CarryTrades;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -10,13 +11,16 @@ public sealed class ExecutionController : ControllerBase
 {
     private readonly ExecutionOptions _options;
     private readonly ExecutionGateService _executionGate;
+    private readonly ICarryTradeRepository _carryTradeRepository;
 
     public ExecutionController(
         IOptions<ExecutionOptions> options,
-        ExecutionGateService executionGate)
+        ExecutionGateService executionGate,
+        ICarryTradeRepository carryTradeRepository)
     {
         _options = options.Value;
         _executionGate = executionGate;
+        _carryTradeRepository = carryTradeRepository;
     }
 
     [HttpGet("config")]
@@ -114,5 +118,56 @@ public sealed class ExecutionController : ControllerBase
         return await _executionGate.FinishAttemptAsync(
             request,
             ct);
+    }
+
+    [HttpGet("trades")]
+    public async Task<IReadOnlyList<CarryTrade>> Trades(
+        [FromQuery] int hours = 168,
+        [FromQuery] int limit = 100,
+        CancellationToken ct = default)
+    {
+        var safeHours = Math.Clamp(hours, 1, 24 * 30);
+        var safeLimit = Math.Clamp(limit, 1, 500);
+
+        return await _carryTradeRepository.ListRecentAsync(
+            safeHours,
+            safeLimit,
+            ct);
+    }
+
+    [HttpPost("trades/{id:guid}/close")]
+    public async Task<IActionResult> CloseTrade(
+        Guid id,
+        CancellationToken ct)
+    {
+        var trade = await _carryTradeRepository.GetByIdAsync(id, ct);
+
+        if (trade is null)
+            return NotFound(new { Error = "Carry trade not found." });
+
+        if (trade.Status != CarryTradeStatus.Open)
+        {
+            return BadRequest(new
+            {
+                Error = $"Carry trade is not open (status={trade.Status}); cannot request a manual close."
+            });
+        }
+
+        var flagged = await _carryTradeRepository.MarkClosingAsync(id, ct);
+
+        if (!flagged)
+        {
+            return BadRequest(new
+            {
+                Error = "Carry trade could not be flagged for closing (it may have changed status concurrently)."
+            });
+        }
+
+        return Ok(new
+        {
+            Id = id,
+            Status = "Closing",
+            Message = "Close requested; the position monitor will close it on its next tick."
+        });
     }
 }

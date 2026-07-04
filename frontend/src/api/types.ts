@@ -44,7 +44,6 @@ export type BestSignalSummary = {
     tradingPair: string;
     direction: string;
     netEdgePct: number | null;
-    estimatedProfitUsd: number | null;
     decisionReason: string;
 };
 
@@ -67,7 +66,6 @@ export type ActiveSignalItem = {
     validationReason?: string | null;
 
     notionalUsd: number;
-    estimatedProfitUsd: number | null;
 
     grossSpreadPct: number | null;
     estimatedFeesPct: number | null;
@@ -87,10 +85,6 @@ export type ActiveSignalItem = {
 
 export type AnalyticsSummaryResponse = {
     tradesCount: number;
-    totalEntryProfitUsd: number;
-    totalAvgProfitUsd: number;
-    totalConservativeProfitUsd: number;
-    totalBestCaseProfitUsd: number;
     avgEntryEdgePct: number;
     maxEntryEdgePct: number;
     minEntryEdgePct: number;
@@ -103,8 +97,6 @@ export type TopOpportunityItem = {
     longConnector: string;
     shortConnector: string;
     trades: number;
-    entryProfitUsd: number;
-    conservativeProfitUsd: number;
     avgEntryEdgePct: number;
     maxEntryEdgePct: number;
     minEntryEdgePct: number;
@@ -116,4 +108,35 @@ export type DepthIssueItem = {
     problematicConnector: string;
     status: string;
     rows: number;
+};
+
+export type CarryTradeItem = {
+    id: string;
+    tradingPair: string;
+    longConnector: string;
+    shortConnector: string;
+    notionalUsd: number;
+    baseQuantity: number;
+    entryLongPrice: number;
+    entryShortPrice: number;
+    entryFeesUsd: number;
+    entryNetEdgePct: number;
+    openedAt: string;
+    status: string;
+    exitLongPrice: number | null;
+    exitShortPrice: number | null;
+    exitFeesUsd: number | null;
+    closeReason: string | null;
+    closedAt: string | null;
+    realizedPnlUsd: number | null;
+    error: string | null;
+};
+
+export type RealizedSummaryResponse = {
+    tradesCount: number;
+    totalRealizedPnlUsd: number;
+    avgRealizedPnlUsd: number;
+    winRatePct: number;
+    avgHoldMinutes: number;
+    lastClosedAt: string | null;
 };

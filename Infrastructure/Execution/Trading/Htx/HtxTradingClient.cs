@@ -1,5 +1,7 @@
 ﻿using System.Globalization;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Arbitrage.Api.Application.Execution.Credentials;
 using Arbitrage.Api.Application.Execution.Trading;
@@ -131,8 +133,161 @@ public sealed class HtxTradingClient : IExchangeTradingClient
         return Task.FromResult(result);
     }
 
-    // PlaceOrderAsync is intentionally not implemented yet. When added, round price/qty
-    // via OrderSizeRounding using these rules and attach client_order_id for retry idempotency.
+    // NOTE: field names follow HTX's documented linear-swap order/order-info shape as of this
+    // writing. Verify against the live API/sandbox before enabling real capital (see plan's
+    // smoke-test step) - HTX's client_order_id must be a 64-bit integer, not a free-form string,
+    // so the attempt Guid is deterministically hashed down to a positive long for idempotency.
+    public async Task<OrderFillResult> PlaceOrderAsync(
+        ExchangeApiCredentialSecret credentials,
+        PlaceOrderRequest request,
+        CancellationToken ct)
+    {
+        var contractCode = InstrumentFilterService.NormalizeTradingPair(request.TradingPair);
+        var clientOrderId = ToHtxClientOrderId(request.ClientOrderId);
+
+        var body = JsonSerializer.Serialize(new
+        {
+            contract_code = contractCode,
+            client_order_id = clientOrderId,
+            direction = request.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? "buy" : "sell",
+            offset = request.ReduceOnly ? "close" : "open",
+            lever_rate = 1,
+            volume = (long)request.Quantity,
+            order_price_type = "optimal_20_ioc",
+            reduce_only = request.ReduceOnly ? 1 : 0
+        });
+
+        using var createDocument = await SendSignedPostJsonAsync(
+            path: _options.OrderPath,
+            body: body,
+            credentials: credentials,
+            ct: ct);
+
+        EnsureHtxSuccess(createDocument.RootElement);
+
+        var createData = TryGetPropertyIgnoreCase(
+            createDocument.RootElement,
+            "data");
+
+        var orderId = GetString(createData, "order_id_str") ?? GetString(createData, "order_id") ?? "";
+
+        var fill = await GetOrderFillWithRetryAsync(
+            contractCode,
+            orderId,
+            credentials,
+            ct);
+
+        return new OrderFillResult(
+            ConnectorName: ConnectorName,
+            ClientOrderId: request.ClientOrderId,
+            ExchangeOrderId: orderId,
+            IsFilled: fill.FilledQuantity > 0,
+            FilledQuantity: fill.FilledQuantity,
+            AverageFillPrice: fill.AveragePrice,
+            FeePaidUsd: fill.FeePaid,
+            Status: fill.FilledQuantity >= request.Quantity ? "Filled" : fill.FilledQuantity > 0 ? "PartiallyFilled" : "Unfilled",
+            FilledAt: DateTimeOffset.UtcNow);
+    }
+
+    private async Task<(decimal FilledQuantity, decimal AveragePrice, decimal FeePaid)> GetOrderFillWithRetryAsync(
+        string contractCode,
+        string orderId,
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var extraParameters = new Dictionary<string, string>
+            {
+                ["contract_code"] = contractCode,
+                ["order_id"] = orderId
+            };
+
+            using var document = await SendSignedGetJsonAsync(
+                path: _options.OrderInfoPath,
+                credentials: credentials,
+                extraParameters: extraParameters,
+                ct: ct);
+
+            EnsureHtxSuccess(document.RootElement);
+
+            var data = TryGetPropertyIgnoreCase(
+                document.RootElement,
+                "data");
+
+            var order = data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0
+                ? data[0]
+                : default;
+
+            var filledQuantity = GetDecimal(order, "trade_volume");
+
+            if (filledQuantity > 0)
+            {
+                var turnover = GetDecimal(order, "trade_turnover");
+                var fee = Math.Abs(GetDecimal(order, "fee"));
+                var averagePrice = GetDecimal(order, "trade_avg_price");
+
+                if (averagePrice <= 0 && turnover > 0)
+                    averagePrice = turnover / filledQuantity;
+
+                return (filledQuantity, averagePrice, fee);
+            }
+
+            await Task.Delay(200, ct);
+        }
+
+        return (0m, 0m, 0m);
+    }
+
+    private static long ToHtxClientOrderId(string clientOrderId)
+    {
+        using var sha256 = SHA256.Create();
+
+        var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(clientOrderId));
+
+        var value = BitConverter.ToInt64(hash, 0);
+
+        return value & 0x7FFFFFFFFFFFFFF;
+    }
+
+    private async Task<JsonDocument> SendSignedPostJsonAsync(
+        string path,
+        string body,
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        var signedQueryString = _signer.BuildSignedQueryString(
+            method: "POST",
+            host: _options.SignatureHost,
+            path: path,
+            accessKey: credentials.ApiKey,
+            secretKey: credentials.ApiSecret,
+            extraParameters: null);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{path.TrimStart('/')}?{signedQueryString}");
+
+        request.Content = new StringContent(
+            body,
+            Encoding.UTF8,
+            "application/json");
+
+        using var response = await _httpClient.SendAsync(
+            request,
+            ct);
+
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"HTX HTTP request failed. StatusCode={(int)response.StatusCode}, Body={responseBody}");
+        }
+
+        return JsonDocument.Parse(responseBody);
+    }
+
     public async Task<ExchangeSymbolRules?> GetSymbolRulesAsync(
         string tradingPair,
         CancellationToken ct)

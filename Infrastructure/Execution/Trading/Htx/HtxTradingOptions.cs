@@ -11,4 +11,8 @@ public sealed class HtxTradingOptions
     public string AccountInfoPath { get; init; } = "/linear-swap-api/v3/unified_account_info";
 
     public string ContractInfoPath { get; init; } = "/linear-swap-api/v1/swap_contract_info";
+
+    public string OrderPath { get; init; } = "/linear-swap-api/v1/swap_order";
+
+    public string OrderInfoPath { get; init; } = "/linear-swap-api/v1/swap_order_info";
 }
