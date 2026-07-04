@@ -1,5 +1,6 @@
-﻿import { useEffect, useMemo, useState } from 'react'
-import ExecutionControls from './ExecutionControls'
+import { useEffect, useMemo, useState } from 'react'
+import { getJson } from './lib/http'
+import { formatAge, formatNumber, formatPct, formatTime, getDecisionTone } from './lib/format'
 
 type SystemHealth = {
     status: string
@@ -108,36 +109,7 @@ type StatusDistribution = {
     pct: number
 }
 
-type CarryTradeItem = {
-    id: string
-    tradingPair: string
-    longConnector: string
-    shortConnector: string
-    notionalUsd: number
-    baseQuantity: number
-    entryLongPrice: number
-    entryShortPrice: number
-    entryNetEdgePct: number
-    openedAt: string
-    status: string
-    exitLongPrice: number | null
-    exitShortPrice: number | null
-    closeReason: string | null
-    closedAt: string | null
-    realizedPnlUsd: number | null
-    error: string | null
-}
-
-type RealizedSummary = {
-    tradesCount: number
-    totalRealizedPnlUsd: number
-    avgRealizedPnlUsd: number
-    winRatePct: number
-    avgHoldMinutes: number
-    lastClosedAt: string | null
-}
-
-type DashboardState = {
+type MonitoringState = {
     health: SystemHealth | null
     signalsSummary: SignalsSummary | null
     activeSignals: ActiveSignalsResponse | null
@@ -145,51 +117,6 @@ type DashboardState = {
     topOpportunities: TopOpportunity[]
     depthIssues: DepthIssue[]
     statuses: StatusDistribution[]
-    carryTrades: CarryTradeItem[]
-    realizedSummary: RealizedSummary | null
-}
-
-function formatUsd(value: number | null | undefined, digits = 2) {
-    if (value === null || value === undefined || Number.isNaN(value)) return '—'
-    return `${value.toFixed(digits)} USDT`
-}
-
-function formatPct(value: number | null | undefined, digits = 3) {
-    if (value === null || value === undefined || Number.isNaN(value)) return '—'
-    return `${value.toFixed(digits)}%`
-}
-
-function formatNumber(value: number | null | undefined) {
-    if (value === null || value === undefined || Number.isNaN(value)) return '—'
-    return value.toLocaleString('en-US')
-}
-
-function formatAge(ms: number | null | undefined) {
-    if (ms === null || ms === undefined || Number.isNaN(ms)) return '—'
-    if (ms < 1000) return `${Math.round(ms)} ms`
-    if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`
-    return `${(ms / 60_000).toFixed(1)} min`
-}
-
-function formatTime(value: string | null | undefined) {
-    if (!value) return '—'
-
-    const date = new Date(value)
-
-    if (Number.isNaN(date.getTime())) return '—'
-
-    return date.toLocaleTimeString()
-}
-
-async function getJson<T>(url: string): Promise<T> {
-    const response = await fetch(url)
-
-    if (!response.ok) {
-        const text = await response.text()
-        throw new Error(`${response.status} ${response.statusText}: ${text}`)
-    }
-
-    return response.json() as Promise<T>
 }
 
 function getHealthTone(status: string | undefined) {
@@ -197,17 +124,6 @@ function getHealthTone(status: string | undefined) {
     if (status.toLowerCase() === 'healthy') return 'good'
     if (status.toLowerCase() === 'degraded') return 'warn'
     return 'bad'
-}
-
-function getDecisionTone(decision: string | undefined) {
-    const normalized = decision?.toLowerCase()
-
-    if (normalized === 'alert') return 'alert'
-    if (normalized === 'candidate') return 'candidate'
-    if (normalized === 'blocked') return 'blocked'
-    if (normalized === 'ignored') return 'ignored'
-
-    return 'neutral'
 }
 
 function KpiCard(props: {
@@ -239,8 +155,8 @@ function EmptyRow({ columns, text }: { columns: number; text: string }) {
     )
 }
 
-function Dashboard() {
-    const [state, setState] = useState<DashboardState>({
+function MonitoringPage() {
+    const [state, setState] = useState<MonitoringState>({
         health: null,
         signalsSummary: null,
         activeSignals: null,
@@ -248,8 +164,6 @@ function Dashboard() {
         topOpportunities: [],
         depthIssues: [],
         statuses: [],
-        carryTrades: [],
-        realizedSummary: null,
     })
 
     const [loading, setLoading] = useState(true)
@@ -260,29 +174,16 @@ function Dashboard() {
         try {
             setError(null)
 
-            const [
-                health,
-                signalsSummary,
-                activeSignals,
-                analyticsSummary,
-                topOpportunities,
-                depthIssues,
-                statuses,
-                carryTrades,
-                realizedSummary,
-            ] = await Promise.all([
-                getJson<SystemHealth>('/api/system/health'),
-                getJson<SignalsSummary>('/api/signals/active/summary'),
-                getJson<ActiveSignalsResponse>(
-                    '/api/signals/active?limit=50',
-                ),
-                getJson<AnalyticsSummary>('/api/analytics/opportunities/summary?hours=12'),
-                getJson<TopOpportunity[]>('/api/analytics/opportunities/top?hours=12&limit=10'),
-                getJson<DepthIssue[]>('/api/analytics/opportunities/depth-issues?hours=12&limit=10'),
-                getJson<StatusDistribution[]>('/api/analytics/opportunities/statuses?hours=12'),
-                getJson<CarryTradeItem[]>('/api/execution/trades?hours=168&limit=20'),
-                getJson<RealizedSummary>('/api/analytics/opportunities/realized/summary?hours=168'),
-            ])
+            const [health, signalsSummary, activeSignals, analyticsSummary, topOpportunities, depthIssues, statuses] =
+                await Promise.all([
+                    getJson<SystemHealth>('/api/system/health'),
+                    getJson<SignalsSummary>('/api/signals/active/summary'),
+                    getJson<ActiveSignalsResponse>('/api/signals/active?limit=50'),
+                    getJson<AnalyticsSummary>('/api/analytics/opportunities/summary?hours=12'),
+                    getJson<TopOpportunity[]>('/api/analytics/opportunities/top?hours=12&limit=10'),
+                    getJson<DepthIssue[]>('/api/analytics/opportunities/depth-issues?hours=12&limit=10'),
+                    getJson<StatusDistribution[]>('/api/analytics/opportunities/statuses?hours=12'),
+                ])
 
             setState({
                 health,
@@ -292,8 +193,6 @@ function Dashboard() {
                 topOpportunities,
                 depthIssues,
                 statuses,
-                carryTrades,
-                realizedSummary,
             })
 
             setLastRefreshAt(new Date())
@@ -312,10 +211,7 @@ function Dashboard() {
         return () => window.clearInterval(timer)
     }, [])
 
-    const healthTone = useMemo(
-        () => getHealthTone(state.health?.status),
-        [state.health?.status],
-    )
+    const healthTone = useMemo(() => getHealthTone(state.health?.status), [state.health?.status])
 
     const activeAlert = state.signalsSummary?.bestAlert
     const activeCandidate = state.signalsSummary?.bestCandidate
@@ -325,7 +221,7 @@ function Dashboard() {
             <header className="header">
                 <div>
                     <div className="eyebrow">CEX-CEX PERP SCANNER</div>
-                    <h1>Arbitrage Dashboard</h1>
+                    <h1>Monitoring</h1>
                     <p>Live signal quality, market data health and 12h opportunity analytics.</p>
                 </div>
 
@@ -358,8 +254,6 @@ function Dashboard() {
                 </div>
             </section>
 
-            <ExecutionControls />
-
             <section className="kpi-grid">
                 <KpiCard
                     title="System status"
@@ -373,13 +267,6 @@ function Dashboard() {
                     value={state.signalsSummary?.alerts ?? '—'}
                     subtitle={`${state.signalsSummary?.candidates ?? 0} candidates · ${state.signalsSummary?.blocked ?? 0} blocked`}
                     tone={(state.signalsSummary?.alerts ?? 0) > 0 ? 'warn' : 'neutral'}
-                />
-
-                <KpiCard
-                    title="Realized PnL"
-                    value={formatUsd(state.realizedSummary?.totalRealizedPnlUsd)}
-                    subtitle={`${state.realizedSummary?.tradesCount ?? 0} closed trades · ${formatPct(state.realizedSummary?.winRatePct, 0)} win rate`}
-                    tone={(state.realizedSummary?.totalRealizedPnlUsd ?? 0) >= 0 ? 'good' : 'bad'}
                 />
 
                 <KpiCard
@@ -487,69 +374,6 @@ function Dashboard() {
 
                             {(state.activeSignals?.items.length ?? 0) === 0 && (
                                 <EmptyRow columns={8} text="No active signal candidates right now." />
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <section className="panel">
-                <div className="panel-header">
-                    <div>
-                        <h2>Real trades</h2>
-                        <p>Actual carry-trade positions - real fills, any exchange pair, not modelled.</p>
-                    </div>
-                    <span>{state.carryTrades.length} rows</span>
-                </div>
-
-                <div className="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Pair</th>
-                                <th>Direction</th>
-                                <th>Status</th>
-                                <th>Qty</th>
-                                <th>Entry</th>
-                                <th>Exit</th>
-                                <th>Realized PnL</th>
-                                <th>Opened</th>
-                                <th>Closed / reason</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {state.carryTrades.map((item) => (
-                                <tr key={item.id}>
-                                    <td className="strong">{item.tradingPair}</td>
-                                    <td>
-                                        <span className="connector">{item.longConnector}</span>
-                                        <span className="arrow">→</span>
-                                        <span className="connector">{item.shortConnector}</span>
-                                    </td>
-                                    <td>
-                                        <span className={`badge badge--${getDecisionTone(item.status)}`}>
-                                            {item.status}
-                                        </span>
-                                    </td>
-                                    <td className="numeric">{item.baseQuantity}</td>
-                                    <td className="numeric">
-                                        {item.entryLongPrice} / {item.entryShortPrice}
-                                    </td>
-                                    <td className="numeric">
-                                        {item.exitLongPrice ?? '—'} / {item.exitShortPrice ?? '—'}
-                                    </td>
-                                    <td className={`numeric ${(item.realizedPnlUsd ?? 0) >= 0 ? 'positive' : ''}`}>
-                                        {formatUsd(item.realizedPnlUsd)}
-                                    </td>
-                                    <td>{formatTime(item.openedAt)}</td>
-                                    <td className="reason">
-                                        {item.closedAt ? `${formatTime(item.closedAt)} · ${item.closeReason ?? '—'}` : item.error ?? '—'}
-                                    </td>
-                                </tr>
-                            ))}
-
-                            {state.carryTrades.length === 0 && (
-                                <EmptyRow columns={9} text="No real trades yet - waiting on the execution pipeline." />
                             )}
                         </tbody>
                     </table>
@@ -666,4 +490,4 @@ function Dashboard() {
     )
 }
 
-export default Dashboard
+export default MonitoringPage

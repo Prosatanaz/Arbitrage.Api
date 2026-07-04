@@ -76,6 +76,45 @@ public sealed class ExchangeCredentialsController : ControllerBase
         }
     }
 
+    [HttpPost("{connectorName}/enable")]
+    public async Task<IActionResult> Enable(
+        string connectorName,
+        CancellationToken ct)
+    {
+        return await SetEnabled(connectorName, true, ct);
+    }
+
+    [HttpPost("{connectorName}/disable")]
+    public async Task<IActionResult> Disable(
+        string connectorName,
+        CancellationToken ct)
+    {
+        return await SetEnabled(connectorName, false, ct);
+    }
+
+    private async Task<IActionResult> SetEnabled(
+        string connectorName,
+        bool isEnabled,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await _credentialService.SetEnabledAsync(
+                connectorName,
+                isEnabled,
+                ct);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new
+            {
+                Error = ex.Message
+            });
+        }
+    }
+
     [HttpPost("{connectorName}/check")]
     public async Task<IActionResult> Check(
         string connectorName,

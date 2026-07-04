@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { getJson, postJson } from './lib/http'
+import { formatDateTime } from './lib/format'
 
 type ExecutionConfig = {
     mode: string
@@ -28,47 +30,6 @@ type ExecutionState = {
 type GateResult = {
     isAllowed: boolean
     reason: string
-}
-
-async function getJson<T>(url: string): Promise<T> {
-    const response = await fetch(url)
-
-    if (!response.ok) {
-        const text = await response.text()
-        throw new Error(`${response.status} ${response.statusText}: ${text}`)
-    }
-
-    return response.json() as Promise<T>
-}
-
-async function postJson<T>(url: string, body?: unknown): Promise<T> {
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-    })
-
-    const text = await response.text()
-    const parsed = text ? (JSON.parse(text) as T) : ({} as T)
-
-    if (!response.ok) {
-        const reason = (parsed as { reason?: string; error?: string })?.reason
-            ?? (parsed as { reason?: string; error?: string })?.error
-            ?? `${response.status} ${response.statusText}`
-        throw new Error(reason)
-    }
-
-    return parsed
-}
-
-function formatTime(value: string | null | undefined) {
-    if (!value) return '—'
-
-    const date = new Date(value)
-
-    if (Number.isNaN(date.getTime())) return '—'
-
-    return date.toLocaleString()
 }
 
 function runtimeStatusTone(status: string | undefined) {
@@ -231,7 +192,7 @@ function ExecutionControls() {
                 </div>
                 <div className="execution-controls__stat">
                     <span>Armed until</span>
-                    <strong>{formatTime(state?.armedUntil)}</strong>
+                    <strong>{formatDateTime(state?.armedUntil)}</strong>
                 </div>
                 <div className="execution-controls__stat execution-controls__stat--wide">
                     <span>Last reason</span>

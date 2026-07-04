@@ -1,31 +1,37 @@
 import { useState } from 'react'
 import './styles.css'
-import Dashboard from './Dashboard'
+import MonitoringPage from './MonitoringPage'
+import TradingPage from './TradingPage'
 import ConnectorsPage from './ConnectorsPage'
 
-type View = 'dashboard' | 'connectors'
+type View = 'monitoring' | 'trading' | 'connectors'
+
+const TABS: { view: View; label: string }[] = [
+    { view: 'monitoring', label: 'Monitoring' },
+    { view: 'trading', label: 'Trading' },
+    { view: 'connectors', label: 'Connectors' },
+]
 
 function App() {
-    const [view, setView] = useState<View>('dashboard')
+    const [view, setView] = useState<View>('monitoring')
 
     return (
         <>
             <nav className="nav-tabs">
-                <button
-                    className={`nav-tab ${view === 'dashboard' ? 'nav-tab--active' : ''}`}
-                    onClick={() => setView('dashboard')}
-                >
-                    Dashboard
-                </button>
-                <button
-                    className={`nav-tab ${view === 'connectors' ? 'nav-tab--active' : ''}`}
-                    onClick={() => setView('connectors')}
-                >
-                    Connectors
-                </button>
+                {TABS.map((tab) => (
+                    <button
+                        key={tab.view}
+                        className={`nav-tab ${view === tab.view ? 'nav-tab--active' : ''}`}
+                        onClick={() => setView(tab.view)}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
             </nav>
 
-            {view === 'dashboard' ? <Dashboard /> : <ConnectorsPage />}
+            {view === 'monitoring' && <MonitoringPage />}
+            {view === 'trading' && <TradingPage />}
+            {view === 'connectors' && <ConnectorsPage />}
         </>
     )
 }

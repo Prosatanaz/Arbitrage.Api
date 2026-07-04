@@ -88,6 +88,15 @@ button {
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.connector-card--configured {
+    border-color: rgba(59, 130, 246, 0.28);
+}
+
+.connector-card:hover {
+    transform: translateY(-1px);
 }
 
 .connector-card__header {
@@ -95,6 +104,29 @@ button {
     justify-content: space-between;
     align-items: flex-start;
     gap: 0.75rem;
+}
+
+.connector-card__identity {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    min-width: 0;
+}
+
+.connector-card__avatar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: 12px;
+    background: linear-gradient(150deg, rgba(59, 130, 246, 0.35), rgba(20, 184, 166, 0.28));
+    border: 1px solid rgba(147, 197, 253, 0.35);
+    color: #e2e8f0;
+    font-weight: 950;
+    font-size: 0.82rem;
+    letter-spacing: -0.02em;
 }
 
 .connector-card__name {
@@ -107,7 +139,7 @@ button {
 .connector-card__meta {
     color: #94a3b8;
     font-size: 0.82rem;
-    margin-top: 0.25rem;
+    margin-top: 0.2rem;
 }
 
 .connector-card__badges {
@@ -117,10 +149,71 @@ button {
 }
 
 .connector-card__status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    color: #94a3b8;
+    font-size: 0.78rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    padding-top: 0.7rem;
+}
+
+.toggle-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    cursor: pointer;
+    width: fit-content;
+}
+
+.toggle-switch input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-switch__track {
+    position: relative;
+    width: 2.4rem;
+    height: 1.35rem;
+    border-radius: 999px;
+    background: rgba(51, 65, 85, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.toggle-switch__track::before {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 1.05rem;
+    height: 1.05rem;
+    border-radius: 50%;
+    background: #e2e8f0;
+    transition: transform 0.15s ease;
+}
+
+.toggle-switch input:checked + .toggle-switch__track {
+    background: rgba(37, 99, 235, 0.65);
+    border-color: rgba(147, 197, 253, 0.6);
+}
+
+.toggle-switch input:checked + .toggle-switch__track::before {
+    transform: translateX(1.05rem);
+}
+
+.toggle-switch input:disabled + .toggle-switch__track {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.toggle-switch__label {
     color: #cbd5e1;
     font-size: 0.82rem;
-    border-top: 1px solid rgba(148, 163, 184, 0.12);
-    padding-top: 0.75rem;
+    font-weight: 800;
 }
 
 .connector-card__error {

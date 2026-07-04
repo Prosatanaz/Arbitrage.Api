@@ -137,6 +137,29 @@ public sealed class ExchangeCredentialService
             IsEnabled: stored.IsEnabled);
     }
 
+    public async Task<ExchangeCredentialSummary> SetEnabledAsync(
+        string connectorName,
+        bool isEnabled,
+        CancellationToken ct)
+    {
+        var normalizedConnectorName = NormalizeConnectorName(connectorName);
+
+        ValidateConnectorIsSupported(normalizedConnectorName);
+
+        var stored = await _repository.SetEnabledAsync(
+            normalizedConnectorName,
+            isEnabled,
+            ct);
+
+        if (stored is null)
+        {
+            throw new InvalidOperationException(
+                $"No stored credentials for connector '{normalizedConnectorName}' - configure API key/secret first.");
+        }
+
+        return ToSummary(stored);
+    }
+
     public async Task<ExchangeCredentialSummary?> UpdateCheckResultAsync(
         string connectorName,
         string status,

@@ -26,4 +26,9 @@ public interface IExchangeApiCredentialsRepository
         string status,
         string? error,
         CancellationToken ct);
+
+    Task<StoredExchangeApiCredential?> SetEnabledAsync(
+        string connectorName,
+        bool isEnabled,
+        CancellationToken ct);
 }

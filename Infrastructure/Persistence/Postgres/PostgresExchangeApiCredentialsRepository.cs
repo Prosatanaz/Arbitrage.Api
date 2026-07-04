@@ -196,6 +196,43 @@ public sealed class PostgresExchangeApiCredentialsRepository : IExchangeApiCrede
                 cancellationToken: ct));
     }
 
+    public async Task<StoredExchangeApiCredential?> SetEnabledAsync(
+        string connectorName,
+        bool isEnabled,
+        CancellationToken ct)
+    {
+        const string sql = """
+        update exchange_api_credentials
+        set
+            is_enabled = @IsEnabled,
+            updated_at = now()
+        where connector_name = @ConnectorName
+        returning
+            connector_name as "ConnectorName",
+            api_key as "ApiKey",
+            encrypted_api_secret as "EncryptedApiSecret",
+            encrypted_passphrase as "EncryptedPassphrase",
+            is_enabled as "IsEnabled",
+            last_checked_at as "LastCheckedAt",
+            last_check_status as "LastCheckStatus",
+            last_check_error as "LastCheckError",
+            created_at as "CreatedAt",
+            updated_at as "UpdatedAt";
+        """;
+
+        await using var connection = await OpenConnectionAsync(ct);
+
+        return await connection.QuerySingleOrDefaultAsync<StoredExchangeApiCredential>(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    ConnectorName = connectorName,
+                    IsEnabled = isEnabled
+                },
+                cancellationToken: ct));
+    }
+
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken ct)
     {
         var connection = _connectionFactory.CreateConnection();

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { getJson, postJson, putJson, deleteJson } from './lib/http'
+import { formatConnectorLabel, formatDateTime } from './lib/format'
 
 type ExchangeCredentialSummary = {
     connectorName: string
@@ -18,34 +20,10 @@ type CheckResult = {
     error?: string | null
 }
 
-async function getJson<T>(url: string): Promise<T> {
-    const response = await fetch(url)
-
-    if (!response.ok) {
-        const text = await response.text()
-        throw new Error(`${response.status} ${response.statusText}: ${text}`)
-    }
-
-    return response.json() as Promise<T>
-}
-
-async function readErrorMessage(response: Response) {
-    try {
-        const body = await response.json()
-        return body?.error ?? `${response.status} ${response.statusText}`
-    } catch {
-        return `${response.status} ${response.statusText}`
-    }
-}
-
-function formatTime(value: string | null | undefined) {
-    if (!value) return '—'
-
-    const date = new Date(value)
-
-    if (Number.isNaN(date.getTime())) return '—'
-
-    return date.toLocaleString()
+function checkStatusTone(summary: ExchangeCredentialSummary) {
+    if (!summary.isConfigured) return 'neutral'
+    if (!summary.lastCheckStatus) return 'neutral'
+    return summary.lastCheckStatus.toLowerCase() === 'connected' ? 'candidate' : 'blocked'
 }
 
 function ConnectorCard({
@@ -55,6 +33,7 @@ function ConnectorCard({
     summary: ExchangeCredentialSummary
     onChanged: () => void
 }) {
+    const [editing, setEditing] = useState(!summary.isConfigured)
     const [apiKey, setApiKey] = useState('')
     const [apiSecret, setApiSecret] = useState('')
     const [passphrase, setPassphrase] = useState('')
@@ -65,33 +44,46 @@ function ConnectorCard({
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState<string | null>(null)
 
+    function resetForm() {
+        setApiKey('')
+        setApiSecret('')
+        setPassphrase('')
+        setIsEnabled(summary.isConfigured ? summary.isEnabled : true)
+    }
+
     async function save() {
         setBusy(true)
         setMessage(null)
 
         try {
-            const response = await fetch(`/api/execution/credentials/${summary.connectorName}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    apiKey,
-                    apiSecret,
-                    passphrase: passphrase || null,
-                    isEnabled,
-                }),
+            await putJson(`/api/execution/credentials/${summary.connectorName}`, {
+                apiKey,
+                apiSecret,
+                passphrase: passphrase || null,
+                isEnabled,
             })
 
-            if (!response.ok) {
-                throw new Error(await readErrorMessage(response))
-            }
-
-            setApiKey('')
-            setApiSecret('')
-            setPassphrase('')
+            resetForm()
+            setEditing(false)
             setMessage('Saved.')
             onChanged()
         } catch (err) {
             setMessage(err instanceof Error ? err.message : 'Save failed.')
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    async function toggleEnabled() {
+        setBusy(true)
+        setMessage(null)
+
+        try {
+            const path = summary.isEnabled ? 'disable' : 'enable'
+            await postJson(`/api/execution/credentials/${summary.connectorName}/${path}`)
+            onChanged()
+        } catch (err) {
+            setMessage(err instanceof Error ? err.message : 'Toggle failed.')
         } finally {
             setBusy(false)
         }
@@ -102,11 +94,7 @@ function ConnectorCard({
         setMessage(null)
 
         try {
-            const response = await fetch(`/api/execution/credentials/${summary.connectorName}/check`, {
-                method: 'POST',
-            })
-
-            const body = (await response.json()) as CheckResult
+            const body = await postJson<CheckResult>(`/api/execution/credentials/${summary.connectorName}/check`)
             setMessage(`${body.status ?? 'Unknown'}${body.error ? ` — ${body.error}` : ''}`)
             onChanged()
         } catch (err) {
@@ -117,20 +105,13 @@ function ConnectorCard({
     }
 
     async function remove() {
-        if (!window.confirm(`Delete stored credentials for ${summary.connectorName}?`)) return
+        if (!window.confirm(`Delete stored credentials for ${formatConnectorLabel(summary.connectorName)}?`)) return
 
         setBusy(true)
         setMessage(null)
 
         try {
-            const response = await fetch(`/api/execution/credentials/${summary.connectorName}`, {
-                method: 'DELETE',
-            })
-
-            if (!response.ok) {
-                throw new Error(await readErrorMessage(response))
-            }
-
+            await deleteJson(`/api/execution/credentials/${summary.connectorName}`)
             onChanged()
         } catch (err) {
             setMessage(err instanceof Error ? err.message : 'Delete failed.')
@@ -139,90 +120,127 @@ function ConnectorCard({
         }
     }
 
+    const initials = summary.connectorName.slice(0, 2).toUpperCase()
+
     return (
-        <article className="panel connector-card">
+        <article className={`panel connector-card ${summary.isConfigured ? 'connector-card--configured' : ''}`}>
             <div className="connector-card__header">
-                <div>
-                    <div className="connector-card__name">{summary.connectorName}</div>
-                    <div className="connector-card__meta">
-                        {summary.isConfigured ? `Key ${summary.maskedApiKey}` : 'Not configured'}
+                <div className="connector-card__identity">
+                    <span className="connector-card__avatar">{initials}</span>
+                    <div>
+                        <div className="connector-card__name">{formatConnectorLabel(summary.connectorName)}</div>
+                        <div className="connector-card__meta">
+                            {summary.isConfigured ? `Key ${summary.maskedApiKey}` : 'Not configured'}
+                        </div>
                     </div>
                 </div>
 
-                <div className="connector-card__badges">
-                    <span className={`badge badge--${summary.isConfigured ? 'candidate' : 'neutral'}`}>
-                        {summary.isConfigured ? 'Configured' : 'Empty'}
-                    </span>
-                    <span className={`badge badge--${summary.isEnabled ? 'candidate' : 'ignored'}`}>
-                        {summary.isEnabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                </div>
+                <span className={`badge badge--${checkStatusTone(summary)}`}>
+                    {summary.isConfigured ? (summary.lastCheckStatus ?? 'Not checked') : 'Empty'}
+                </span>
             </div>
 
             {summary.isConfigured && (
-                <div className="connector-card__status">
-                    Last check: {summary.lastCheckStatus ?? '—'} ({formatTime(summary.lastCheckedAt)})
-                    {summary.lastCheckError && (
-                        <div className="connector-card__error">{summary.lastCheckError}</div>
-                    )}
-                </div>
+                <>
+                    <div className="connector-card__status">
+                        <span>Last check {formatDateTime(summary.lastCheckedAt)}</span>
+                        {summary.lastCheckError && (
+                            <div className="connector-card__error">{summary.lastCheckError}</div>
+                        )}
+                    </div>
+
+                    <label className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={summary.isEnabled}
+                            onChange={toggleEnabled}
+                            disabled={busy}
+                        />
+                        <span className="toggle-switch__track" />
+                        <span className="toggle-switch__label">
+                            {summary.isEnabled ? 'Enabled' : 'Disabled'}
+                        </span>
+                    </label>
+                </>
             )}
 
-            <div className="field-grid">
-                <label className="field">
-                    <span>API key</span>
-                    <input
-                        type="text"
-                        value={apiKey}
-                        onChange={(event) => setApiKey(event.target.value)}
-                        placeholder={summary.isConfigured ? 'Leave blank to keep unchanged' : 'API key'}
-                        autoComplete="off"
-                    />
-                </label>
+            {editing ? (
+                <>
+                    <div className="field-grid">
+                        <label className="field">
+                            <span>API key</span>
+                            <input
+                                type="text"
+                                value={apiKey}
+                                onChange={(event) => setApiKey(event.target.value)}
+                                placeholder="API key"
+                                autoComplete="off"
+                            />
+                        </label>
 
-                <label className="field">
-                    <span>API secret</span>
-                    <input
-                        type="password"
-                        value={apiSecret}
-                        onChange={(event) => setApiSecret(event.target.value)}
-                        placeholder={summary.isConfigured ? 'Leave blank to keep unchanged' : 'API secret'}
-                        autoComplete="new-password"
-                    />
-                </label>
+                        <label className="field">
+                            <span>API secret</span>
+                            <input
+                                type="password"
+                                value={apiSecret}
+                                onChange={(event) => setApiSecret(event.target.value)}
+                                placeholder="API secret"
+                                autoComplete="new-password"
+                            />
+                        </label>
 
-                <label className="field">
-                    <span>Passphrase (if required)</span>
-                    <input
-                        type="password"
-                        value={passphrase}
-                        onChange={(event) => setPassphrase(event.target.value)}
-                        placeholder="Optional"
-                        autoComplete="new-password"
-                    />
-                </label>
+                        <label className="field">
+                            <span>Passphrase (if required)</span>
+                            <input
+                                type="password"
+                                value={passphrase}
+                                onChange={(event) => setPassphrase(event.target.value)}
+                                placeholder="Optional"
+                                autoComplete="new-password"
+                            />
+                        </label>
 
-                <label className="field field--checkbox">
-                    <input
-                        type="checkbox"
-                        checked={isEnabled}
-                        onChange={(event) => setIsEnabled(event.target.checked)}
-                    />
-                    <span>Enabled</span>
-                </label>
-            </div>
+                        <label className="field field--checkbox">
+                            <input
+                                type="checkbox"
+                                checked={isEnabled}
+                                onChange={(event) => setIsEnabled(event.target.checked)}
+                            />
+                            <span>Enabled</span>
+                        </label>
+                    </div>
 
-            <div className="connector-card__actions">
-                <button onClick={save} disabled={busy || !apiKey || !apiSecret}>
-                    {busy ? 'Working...' : 'Save'}
-                </button>
-                <button onClick={check} disabled={busy || !summary.isConfigured}>
-                    Check connection
-                </button>
-                <button onClick={remove} disabled={busy || !summary.isConfigured} className="button--danger">
-                    Delete
-                </button>
-            </div>
+                    <div className="connector-card__actions">
+                        <button onClick={save} disabled={busy || !apiKey || !apiSecret}>
+                            {busy ? 'Working...' : 'Save'}
+                        </button>
+                        {summary.isConfigured && (
+                            <button
+                                onClick={() => {
+                                    resetForm()
+                                    setEditing(false)
+                                    setMessage(null)
+                                }}
+                                disabled={busy}
+                            >
+                                Cancel
+                            </button>
+                        )}
+                    </div>
+                </>
+            ) : (
+                <div className="connector-card__actions">
+                    <button onClick={check} disabled={busy}>
+                        Check connection
+                    </button>
+                    <button onClick={() => setEditing(true)} disabled={busy}>
+                        Rewrite key
+                    </button>
+                    <button onClick={remove} disabled={busy} className="button--danger">
+                        Delete
+                    </button>
+                </div>
+            )}
 
             {message && <div className="connector-card__message">{message}</div>}
         </article>
@@ -250,6 +268,8 @@ function ConnectorsPage() {
         load()
     }, [])
 
+    const configuredCount = summaries.filter((x) => x.isConfigured).length
+
     return (
         <main className="page">
             <header className="header">
@@ -263,6 +283,7 @@ function ConnectorsPage() {
                 </div>
 
                 <div className="header-actions">
+                    <span>{configuredCount} / {summaries.length} configured</span>
                     <button onClick={load} disabled={loading}>
                         {loading ? 'Loading...' : 'Refresh'}
                     </button>
