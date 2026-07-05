@@ -47,6 +47,7 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
         returning
             runtime_status as "RuntimeStatus",
             kill_switch_enabled as "KillSwitchEnabled",
+            manual_trading_enabled as "ManualTradingEnabled",
             remaining_attempts as "RemainingAttempts",
             max_notional_usd as "MaxNotionalUsd",
             armed_until as "ArmedUntil",
@@ -91,6 +92,7 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
         returning
             runtime_status as "RuntimeStatus",
             kill_switch_enabled as "KillSwitchEnabled",
+            manual_trading_enabled as "ManualTradingEnabled",
             remaining_attempts as "RemainingAttempts",
             max_notional_usd as "MaxNotionalUsd",
             armed_until as "ArmedUntil",
@@ -134,6 +136,7 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
         returning
             runtime_status as "RuntimeStatus",
             kill_switch_enabled as "KillSwitchEnabled",
+            manual_trading_enabled as "ManualTradingEnabled",
             remaining_attempts as "RemainingAttempts",
             max_notional_usd as "MaxNotionalUsd",
             armed_until as "ArmedUntil",
@@ -152,6 +155,48 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
                 {
                     RuntimeStatus = status,
                     KillSwitchEnabled = enabled,
+                    Reason = reason
+                },
+                cancellationToken: ct));
+
+        return row.ToModel();
+    }
+
+    public async Task<ExecutionRuntimeState> SetManualTradingEnabledAsync(
+        bool enabled,
+        string reason,
+        CancellationToken ct)
+    {
+        // Only flips the manual-trading toggle; deliberately leaves runtime_status, arming and
+        // the kill switch untouched so this is an independent second gate on manual opens.
+        const string sql = """
+        update execution_runtime_state
+        set
+            manual_trading_enabled = @ManualTradingEnabled,
+            last_status_reason = @Reason,
+            updated_at = now()
+        where id = 1
+        returning
+            runtime_status as "RuntimeStatus",
+            kill_switch_enabled as "KillSwitchEnabled",
+            manual_trading_enabled as "ManualTradingEnabled",
+            remaining_attempts as "RemainingAttempts",
+            max_notional_usd as "MaxNotionalUsd",
+            armed_until as "ArmedUntil",
+            last_attempt_id as "LastAttemptId",
+            last_status_reason as "LastStatusReason",
+            created_at as "CreatedAt",
+            updated_at as "UpdatedAt";
+        """;
+
+        await using var connection = await OpenConnectionAsync(ct);
+
+        var row = await connection.QuerySingleAsync<ExecutionRuntimeStateRow>(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    ManualTradingEnabled = enabled,
                     Reason = reason
                 },
                 cancellationToken: ct));
@@ -188,6 +233,7 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
         returning
             runtime_status as "RuntimeStatus",
             kill_switch_enabled as "KillSwitchEnabled",
+            manual_trading_enabled as "ManualTradingEnabled",
             remaining_attempts as "RemainingAttempts",
             max_notional_usd as "MaxNotionalUsd",
             armed_until as "ArmedUntil",
@@ -241,6 +287,7 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
         returning
             runtime_status as "RuntimeStatus",
             kill_switch_enabled as "KillSwitchEnabled",
+            manual_trading_enabled as "ManualTradingEnabled",
             remaining_attempts as "RemainingAttempts",
             max_notional_usd as "MaxNotionalUsd",
             armed_until as "ArmedUntil",
@@ -291,6 +338,7 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
         returning
             runtime_status as "RuntimeStatus",
             kill_switch_enabled as "KillSwitchEnabled",
+            manual_trading_enabled as "ManualTradingEnabled",
             remaining_attempts as "RemainingAttempts",
             max_notional_usd as "MaxNotionalUsd",
             armed_until as "ArmedUntil",
@@ -329,6 +377,7 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
     select
         runtime_status as "RuntimeStatus",
         kill_switch_enabled as "KillSwitchEnabled",
+        manual_trading_enabled as "ManualTradingEnabled",
         remaining_attempts as "RemainingAttempts",
         max_notional_usd as "MaxNotionalUsd",
         armed_until as "ArmedUntil",
@@ -345,6 +394,8 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
         public string RuntimeStatus { get; set; } = "";
 
         public bool KillSwitchEnabled { get; set; }
+
+        public bool ManualTradingEnabled { get; set; }
 
         public int RemainingAttempts { get; set; }
 
@@ -370,6 +421,7 @@ public sealed class PostgresExecutionRuntimeStateRepository : IExecutionRuntimeS
                     ? parsedStatus
                     : ExecutionRuntimeStatus.LockedByError,
                 KillSwitchEnabled: KillSwitchEnabled,
+                ManualTradingEnabled: ManualTradingEnabled,
                 RemainingAttempts: RemainingAttempts,
                 MaxNotionalUsd: MaxNotionalUsd,
                 ArmedUntil: ArmedUntil,

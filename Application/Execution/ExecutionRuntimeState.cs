@@ -3,6 +3,7 @@
 public sealed record ExecutionRuntimeState(
     ExecutionRuntimeStatus RuntimeStatus,
     bool KillSwitchEnabled,
+    bool ManualTradingEnabled,
     int RemainingAttempts,
     decimal? MaxNotionalUsd,
     DateTimeOffset? ArmedUntil,

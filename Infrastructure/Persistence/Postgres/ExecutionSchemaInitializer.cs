@@ -39,6 +39,7 @@ public sealed class ExecutionSchemaInitializer : IHostedService
 
                     runtime_status text not null,
                     kill_switch_enabled boolean not null,
+                    manual_trading_enabled boolean not null default false,
 
                     remaining_attempts int not null,
                     max_notional_usd numeric(38, 18) null,
@@ -69,6 +70,9 @@ public sealed class ExecutionSchemaInitializer : IHostedService
                     'Execution runtime state initialized.'
                 )
                 on conflict (id) do nothing;
+
+                alter table execution_runtime_state
+                    add column if not exists manual_trading_enabled boolean not null default false;
                 """,
                 cancellationToken: cancellationToken));
 

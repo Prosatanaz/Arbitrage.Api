@@ -300,6 +300,7 @@ builder.Services.AddHostedService<ExecutionStartupSafetyHostedService>();
 
 builder.Services.AddSingleton<ICarryTradeRepository, PostgresCarryTradeRepository>();
 builder.Services.AddSingleton<CarryTradeLegExecutor>();
+builder.Services.AddSingleton<CarryTradeEntryService>();
 
 builder.Services.AddHostedService<CarryTradeSchemaInitializer>();
 builder.Services.AddHostedService<CarryTradeEntryWorker>();

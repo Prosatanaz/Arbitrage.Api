@@ -19,6 +19,11 @@ public interface IExecutionRuntimeStateRepository
         string reason,
         CancellationToken ct);
 
+    Task<ExecutionRuntimeState> SetManualTradingEnabledAsync(
+        bool enabled,
+        string reason,
+        CancellationToken ct);
+
     Task<ExecutionRuntimeState?> TryAcquireAttemptAsync(
         Guid attemptId,
         decimal notionalUsd,

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import ExecutionControls from './ExecutionControls'
+import ManualTradingControls from './ManualTradingControls'
 import { getJson } from './lib/http'
 import { formatTime, formatUsd, formatPct, getDecisionTone } from './lib/format'
 
@@ -120,6 +121,8 @@ function TradingPage() {
             )}
 
             <ExecutionControls />
+
+            <ManualTradingControls />
 
             <section className="kpi-grid">
                 <KpiCard
