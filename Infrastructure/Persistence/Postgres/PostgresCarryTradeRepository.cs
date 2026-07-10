@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Arbitrage.Api.Application.Execution.CarryTrades;
 using Dapper;
 using Npgsql;
@@ -23,12 +24,14 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
             id, attempt_id, trading_pair, long_connector, short_connector,
             notional_usd, base_quantity,
             entry_long_price, entry_short_price, entry_fees_usd, entry_net_edge_pct,
+            entry_gross_spread_pct, entry_estimated_fees_pct, entry_reference_price,
             opened_at, status
         )
         values (
             @Id, @AttemptId, @TradingPair, @LongConnector, @ShortConnector,
             @NotionalUsd, @BaseQuantity,
             @EntryLongPrice, @EntryShortPrice, @EntryFeesUsd, @EntryNetEdgePct,
+            @EntryGrossSpreadPct, @EntryEstimatedFeesPct, @EntryReferencePrice,
             now(), 'Open'
         )
         returning
@@ -51,7 +54,10 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
                     request.EntryLongPrice,
                     request.EntryShortPrice,
                     request.EntryFeesUsd,
-                    request.EntryNetEdgePct
+                    request.EntryNetEdgePct,
+                    request.EntryGrossSpreadPct,
+                    request.EntryEstimatedFeesPct,
+                    request.EntryReferencePrice
                 },
                 cancellationToken: ct));
 
@@ -134,6 +140,7 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
             exit_long_price = @ExitLongPrice,
             exit_short_price = @ExitShortPrice,
             exit_fees_usd = @ExitFeesUsd,
+            exit_net_edge_pct = @ExitNetEdgePct,
             realized_pnl_usd = @RealizedPnlUsd,
             close_reason = @CloseReason,
             closed_at = now(),
@@ -153,6 +160,7 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
                     request.ExitLongPrice,
                     request.ExitShortPrice,
                     request.ExitFeesUsd,
+                    request.ExitNetEdgePct,
                     request.RealizedPnlUsd,
                     request.CloseReason
                 },
@@ -214,6 +222,148 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
         return rows.Select(x => x.ToModel()).ToList();
     }
 
+    public async Task RecordLegAsync(
+        RecordCarryTradeLegRequest request,
+        CancellationToken ct)
+    {
+        const string sql = """
+        insert into carry_trade_legs (
+            trade_id, phase, connector, role, side, reduce_only,
+            requested_quantity, filled_quantity, average_fill_price, fee_paid_usd,
+            exchange_order_id, client_order_id, status, filled_at
+        )
+        values (
+            @TradeId, @Phase, @Connector, @Role, @Side, @ReduceOnly,
+            @RequestedQuantity, @FilledQuantity, @AverageFillPrice, @FeePaidUsd,
+            @ExchangeOrderId, @ClientOrderId, @Status, @FilledAt
+        );
+        """;
+
+        await using var connection = await OpenConnectionAsync(ct);
+
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    request.TradeId,
+                    Phase = request.Phase.ToString(),
+                    request.Connector,
+                    request.Role,
+                    request.Side,
+                    request.ReduceOnly,
+                    request.RequestedQuantity,
+                    request.FilledQuantity,
+                    request.AverageFillPrice,
+                    request.FeePaidUsd,
+                    request.ExchangeOrderId,
+                    request.ClientOrderId,
+                    request.Status,
+                    request.FilledAt
+                },
+                cancellationToken: ct));
+    }
+
+    public async Task RecordEventAsync(
+        RecordCarryTradeEventRequest request,
+        CancellationToken ct)
+    {
+        const string sql = """
+        insert into carry_trade_events (
+            trade_id, attempt_id, event_type, reason, details
+        )
+        values (
+            @TradeId, @AttemptId, @EventType, @Reason, cast(@Details as jsonb)
+        );
+        """;
+
+        var detailsJson = request.Details is null
+            ? null
+            : JsonSerializer.Serialize(request.Details);
+
+        await using var connection = await OpenConnectionAsync(ct);
+
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    request.TradeId,
+                    request.AttemptId,
+                    request.EventType,
+                    request.Reason,
+                    Details = detailsJson
+                },
+                cancellationToken: ct));
+    }
+
+    public async Task<IReadOnlyList<CarryTradeLeg>> ListLegsAsync(
+        Guid tradeId,
+        CancellationToken ct)
+    {
+        const string sql = """
+        select
+            id as "Id",
+            trade_id as "TradeId",
+            phase as "Phase",
+            connector as "Connector",
+            role as "Role",
+            side as "Side",
+            reduce_only as "ReduceOnly",
+            requested_quantity as "RequestedQuantity",
+            filled_quantity as "FilledQuantity",
+            average_fill_price as "AverageFillPrice",
+            fee_paid_usd as "FeePaidUsd",
+            exchange_order_id as "ExchangeOrderId",
+            client_order_id as "ClientOrderId",
+            status as "Status",
+            filled_at as "FilledAt",
+            created_at as "CreatedAt"
+        from carry_trade_legs
+        where trade_id = @TradeId
+        order by id asc;
+        """;
+
+        await using var connection = await OpenConnectionAsync(ct);
+
+        var rows = await connection.QueryAsync<CarryTradeLeg>(
+            new CommandDefinition(
+                sql,
+                new { TradeId = tradeId },
+                cancellationToken: ct));
+
+        return rows.ToList();
+    }
+
+    public async Task<IReadOnlyList<CarryTradeEvent>> ListEventsAsync(
+        Guid tradeId,
+        CancellationToken ct)
+    {
+        const string sql = """
+        select
+            id as "Id",
+            trade_id as "TradeId",
+            attempt_id as "AttemptId",
+            event_type as "EventType",
+            reason as "Reason",
+            details::text as "DetailsJson",
+            created_at as "CreatedAt"
+        from carry_trade_events
+        where trade_id = @TradeId
+        order by id asc;
+        """;
+
+        await using var connection = await OpenConnectionAsync(ct);
+
+        var rows = await connection.QueryAsync<CarryTradeEvent>(
+            new CommandDefinition(
+                sql,
+                new { TradeId = tradeId },
+                cancellationToken: ct));
+
+        return rows.ToList();
+    }
+
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken ct)
     {
         var connection = _connectionFactory.CreateConnection();
@@ -235,11 +385,15 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
         entry_short_price as "EntryShortPrice",
         entry_fees_usd as "EntryFeesUsd",
         entry_net_edge_pct as "EntryNetEdgePct",
+        entry_gross_spread_pct as "EntryGrossSpreadPct",
+        entry_estimated_fees_pct as "EntryEstimatedFeesPct",
+        entry_reference_price as "EntryReferencePrice",
         opened_at as "OpenedAt",
         status as "Status",
         exit_long_price as "ExitLongPrice",
         exit_short_price as "ExitShortPrice",
         exit_fees_usd as "ExitFeesUsd",
+        exit_net_edge_pct as "ExitNetEdgePct",
         close_reason as "CloseReason",
         closed_at as "ClosedAt",
         realized_pnl_usd as "RealizedPnlUsd",
@@ -271,6 +425,12 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
 
         public decimal EntryNetEdgePct { get; set; }
 
+        public decimal? EntryGrossSpreadPct { get; set; }
+
+        public decimal? EntryEstimatedFeesPct { get; set; }
+
+        public decimal? EntryReferencePrice { get; set; }
+
         public DateTimeOffset OpenedAt { get; set; }
 
         public string Status { get; set; } = "";
@@ -280,6 +440,8 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
         public decimal? ExitShortPrice { get; set; }
 
         public decimal? ExitFeesUsd { get; set; }
+
+        public decimal? ExitNetEdgePct { get; set; }
 
         public string? CloseReason { get; set; }
 
@@ -303,6 +465,9 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
                 EntryShortPrice: EntryShortPrice,
                 EntryFeesUsd: EntryFeesUsd,
                 EntryNetEdgePct: EntryNetEdgePct,
+                EntryGrossSpreadPct: EntryGrossSpreadPct,
+                EntryEstimatedFeesPct: EntryEstimatedFeesPct,
+                EntryReferencePrice: EntryReferencePrice,
                 OpenedAt: OpenedAt,
                 Status: Enum.TryParse<CarryTradeStatus>(Status, ignoreCase: true, out var parsedStatus)
                     ? parsedStatus
@@ -310,6 +475,7 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
                 ExitLongPrice: ExitLongPrice,
                 ExitShortPrice: ExitShortPrice,
                 ExitFeesUsd: ExitFeesUsd,
+                ExitNetEdgePct: ExitNetEdgePct,
                 CloseReason: CloseReason,
                 ClosedAt: ClosedAt,
                 RealizedPnlUsd: RealizedPnlUsd,

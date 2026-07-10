@@ -142,24 +142,6 @@ public sealed class ExecutionGateService
             state);
     }
 
-    public async Task<ExecutionGateResult> SetManualTradingAsync(
-        bool enabled,
-        CancellationToken ct)
-    {
-        var state = await _repository.SetManualTradingEnabledAsync(
-            enabled,
-            enabled
-                ? "Manual trading enabled by user."
-                : "Manual trading disabled by user.",
-            ct);
-
-        return new ExecutionGateResult(
-            true,
-            enabled ? "Manual trading enabled." : "Manual trading disabled.",
-            null,
-            state);
-    }
-
     public async Task<ExecutionGateResult> TryAcquireAttemptAsync(
         TryAcquireExecutionAttemptRequest request,
         CancellationToken ct)

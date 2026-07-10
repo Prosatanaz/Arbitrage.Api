@@ -20,11 +20,15 @@ public sealed record CarryTrade(
     decimal EntryShortPrice,
     decimal EntryFeesUsd,
     decimal EntryNetEdgePct,
+    decimal? EntryGrossSpreadPct,
+    decimal? EntryEstimatedFeesPct,
+    decimal? EntryReferencePrice,
     DateTimeOffset OpenedAt,
     CarryTradeStatus Status,
     decimal? ExitLongPrice,
     decimal? ExitShortPrice,
     decimal? ExitFeesUsd,
+    decimal? ExitNetEdgePct,
     string? CloseReason,
     DateTimeOffset? ClosedAt,
     decimal? RealizedPnlUsd,
@@ -40,7 +44,10 @@ public sealed record OpenCarryTradeRequest(
     decimal EntryLongPrice,
     decimal EntryShortPrice,
     decimal EntryFeesUsd,
-    decimal EntryNetEdgePct);
+    decimal EntryNetEdgePct,
+    decimal? EntryGrossSpreadPct,
+    decimal? EntryEstimatedFeesPct,
+    decimal? EntryReferencePrice);
 
 public sealed record CloseCarryTradeRequest(
     Guid Id,
@@ -48,4 +55,5 @@ public sealed record CloseCarryTradeRequest(
     decimal ExitShortPrice,
     decimal ExitFeesUsd,
     decimal RealizedPnlUsd,
+    decimal? ExitNetEdgePct,
     string CloseReason);

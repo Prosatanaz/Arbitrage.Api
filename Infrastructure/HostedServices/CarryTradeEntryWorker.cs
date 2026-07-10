@@ -109,6 +109,8 @@ public sealed class CarryTradeEntryWorker : BackgroundService
                 armedNotionalUsd,
                 candidate.NetEdgePct!.Value,
                 candidate.BuyQuote!.AveragePrice,
+                candidate.GrossSpreadPct,
+                candidate.EstimatedFeesPct,
                 ct);
 
             await _executionGate.FinishAttemptAsync(

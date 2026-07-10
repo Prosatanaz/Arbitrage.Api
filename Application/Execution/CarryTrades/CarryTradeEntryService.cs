@@ -69,18 +69,42 @@ public sealed class CarryTradeEntryService
         decimal armedNotionalUsd,
         decimal entryNetEdgePct,
         decimal referencePrice,
+        decimal? grossSpreadPct,
+        decimal? estimatedFeesPct,
         CancellationToken ct)
     {
+        // Durable decision record: what the auto-worker decided to act on and why, captured
+        // BEFORE firing any real order so the basis is logged even if execution then fails.
+        await SafeRecordEventAsync(
+            new RecordCarryTradeEventRequest(
+                TradeId: null,
+                AttemptId: attemptId,
+                EventType: CarryTradeEventTypes.EntrySignal,
+                Reason: $"Entry signal on {tradingPair}: long {longConnector} / short {shortConnector}, net edge {entryNetEdgePct:0.###}%.",
+                Details: new
+                {
+                    tradingPair,
+                    longConnector,
+                    shortConnector,
+                    armedNotionalUsd,
+                    entryNetEdgePct,
+                    grossSpreadPct,
+                    estimatedFeesPct,
+                    referencePrice,
+                    minEntryNetEdgePct = _options.MinEntryNetEdgePct
+                }),
+            ct);
+
         var longCredentials = await _credentialService.GetSecretAsync(longConnector, ct);
         var shortCredentials = await _credentialService.GetSecretAsync(shortConnector, ct);
 
         if (longCredentials is null || shortCredentials is null)
-            return new CarryTradeEntryResult(false, "Missing credentials for one or both connectors.");
+            return await FailEntryAsync(attemptId, "Missing credentials for one or both connectors.", ct);
 
         if (!_tradingClientRegistry.TryGetClient(longConnector, out var longClient) ||
             !_tradingClientRegistry.TryGetClient(shortConnector, out var shortClient))
         {
-            return new CarryTradeEntryResult(false, "Trading client not implemented for one or both connectors.");
+            return await FailEntryAsync(attemptId, "Trading client not implemented for one or both connectors.", ct);
         }
 
         var longRules = await longClient.GetSymbolRulesAsync(tradingPair, ct);
@@ -96,7 +120,7 @@ public sealed class CarryTradeEntryService
             : rawQuantity;
 
         if (quantity <= 0 || quantity < minQuantity)
-            return new CarryTradeEntryResult(false, "Rounded quantity is below exchange minimum.");
+            return await FailEntryAsync(attemptId, "Rounded quantity is below exchange minimum.", ct);
 
         var legResult = await _legExecutor.ExecuteAsync(
             new LegExecutionRequest(
@@ -120,12 +144,12 @@ public sealed class CarryTradeEntryService
                 attemptId,
                 legResult.FailureReason);
 
-            return new CarryTradeEntryResult(false, legResult.FailureReason ?? "Entry failed.");
+            return await FailEntryAsync(attemptId, legResult.FailureReason ?? "Entry failed.", ct);
         }
 
         var entryFeesUsd = (legResult.LongFill?.FeePaidUsd ?? 0m) + (legResult.ShortFill?.FeePaidUsd ?? 0m);
 
-        await _repository.InsertOpenAsync(
+        var trade = await _repository.InsertOpenAsync(
             new OpenCarryTradeRequest(
                 AttemptId: attemptId,
                 TradingPair: tradingPair,
@@ -136,7 +160,31 @@ public sealed class CarryTradeEntryService
                 EntryLongPrice: legResult.LongFill!.AverageFillPrice,
                 EntryShortPrice: legResult.ShortFill!.AverageFillPrice,
                 EntryFeesUsd: entryFeesUsd,
-                EntryNetEdgePct: entryNetEdgePct),
+                EntryNetEdgePct: entryNetEdgePct,
+                EntryGrossSpreadPct: grossSpreadPct,
+                EntryEstimatedFeesPct: estimatedFeesPct,
+                EntryReferencePrice: referencePrice),
+            ct);
+
+        // Per-leg exchange detail (order ids, exact fills, per-exchange fees).
+        await SafeRecordLegAsync(trade.Id, CarryTradeLegPhase.Entry, "Long", "Buy", quantity, requestedReduceOnly: false, legResult.LongFill, ct);
+        await SafeRecordLegAsync(trade.Id, CarryTradeLegPhase.Entry, "Short", "Sell", quantity, requestedReduceOnly: false, legResult.ShortFill, ct);
+
+        await SafeRecordEventAsync(
+            new RecordCarryTradeEventRequest(
+                TradeId: trade.Id,
+                AttemptId: attemptId,
+                EventType: CarryTradeEventTypes.EntryFilled,
+                Reason: $"Entry filled: matched qty {legResult.MatchedQuantity}, entry fees {entryFeesUsd:0.####} USDT.",
+                Details: new
+                {
+                    matchedQuantity = legResult.MatchedQuantity,
+                    entryLongPrice = legResult.LongFill!.AverageFillPrice,
+                    entryShortPrice = legResult.ShortFill!.AverageFillPrice,
+                    entryFeesUsd,
+                    longLeg = ToLegDetail(legResult.LongFill),
+                    shortLeg = ToLegDetail(legResult.ShortFill)
+                }),
             ct);
 
         _logger.LogInformation(
@@ -149,6 +197,88 @@ public sealed class CarryTradeEntryService
 
         return new CarryTradeEntryResult(true, "Carry trade opened.");
     }
+
+    private async Task<CarryTradeEntryResult> FailEntryAsync(
+        Guid attemptId,
+        string reason,
+        CancellationToken ct)
+    {
+        await SafeRecordEventAsync(
+            new RecordCarryTradeEventRequest(
+                TradeId: null,
+                AttemptId: attemptId,
+                EventType: CarryTradeEventTypes.EntryFailed,
+                Reason: reason,
+                Details: null),
+            ct);
+
+        return new CarryTradeEntryResult(false, reason);
+    }
+
+    private async Task SafeRecordLegAsync(
+        Guid tradeId,
+        CarryTradeLegPhase phase,
+        string role,
+        string side,
+        decimal requestedQuantity,
+        bool requestedReduceOnly,
+        OrderFillResult? fill,
+        CancellationToken ct)
+    {
+        if (fill is null)
+            return;
+
+        try
+        {
+            await _repository.RecordLegAsync(
+                new RecordCarryTradeLegRequest(
+                    TradeId: tradeId,
+                    Phase: phase,
+                    Connector: fill.ConnectorName,
+                    Role: role,
+                    Side: side,
+                    ReduceOnly: requestedReduceOnly,
+                    RequestedQuantity: requestedQuantity,
+                    FilledQuantity: fill.FilledQuantity,
+                    AverageFillPrice: fill.AverageFillPrice,
+                    FeePaidUsd: fill.FeePaidUsd,
+                    ExchangeOrderId: fill.ExchangeOrderId,
+                    ClientOrderId: fill.ClientOrderId,
+                    Status: fill.Status,
+                    FilledAt: fill.FilledAt),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            // Logging must never break execution - the trade itself is already persisted.
+            _logger.LogWarning(ex, "Failed to record carry trade leg for {TradeId} ({Role}).", tradeId, role);
+        }
+    }
+
+    private async Task SafeRecordEventAsync(
+        RecordCarryTradeEventRequest request,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _repository.RecordEventAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to record carry trade event {EventType}.", request.EventType);
+        }
+    }
+
+    private static object ToLegDetail(OrderFillResult fill)
+        => new
+        {
+            connector = fill.ConnectorName,
+            exchangeOrderId = fill.ExchangeOrderId,
+            filledQuantity = fill.FilledQuantity,
+            averageFillPrice = fill.AverageFillPrice,
+            feePaidUsd = fill.FeePaidUsd,
+            status = fill.Status
+        };
 
     public bool IsEnabledConnector(string connectorName)
     {

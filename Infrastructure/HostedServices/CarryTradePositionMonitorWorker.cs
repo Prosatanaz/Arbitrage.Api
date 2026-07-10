@@ -1,6 +1,7 @@
 using Arbitrage.Api.Application.Execution;
 using Arbitrage.Api.Application.Execution.CarryTrades;
 using Arbitrage.Api.Application.Execution.Credentials;
+using Arbitrage.Api.Application.Execution.Trading;
 using Arbitrage.Api.Application.MarketData.Depth;
 using Arbitrage.Api.Application.MarketData.Opportunities;
 using Arbitrage.Api.Application.MarketData.Streaming;
@@ -81,7 +82,14 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
 
         if (trade.Status == CarryTradeStatus.Closing)
         {
-            await ClosePositionAsync(trade, "Manual", ct);
+            await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
+                TradeId: trade.Id,
+                AttemptId: trade.AttemptId,
+                EventType: CarryTradeEventTypes.ExitSignal,
+                Reason: "Manual close requested; closing position.",
+                Details: new { trigger = "Manual" }), ct);
+
+            await ClosePositionAsync(trade, "Manual", null, ct);
             ResetConfirmState();
             return;
         }
@@ -90,7 +98,19 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
 
         if (heldFor >= TimeSpan.FromMinutes(_executionOptions.MaxHoldMinutes))
         {
-            await ClosePositionAsync(trade, "Timeout", ct);
+            await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
+                TradeId: trade.Id,
+                AttemptId: trade.AttemptId,
+                EventType: CarryTradeEventTypes.ExitSignal,
+                Reason: $"Max-hold timeout reached ({_executionOptions.MaxHoldMinutes} min); force-closing.",
+                Details: new
+                {
+                    trigger = "Timeout",
+                    heldMinutes = heldFor.TotalMinutes,
+                    maxHoldMinutes = _executionOptions.MaxHoldMinutes
+                }), ct);
+
+            await ClosePositionAsync(trade, "Timeout", null, ct);
             ResetConfirmState();
             return;
         }
@@ -160,7 +180,22 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
 
             if (_confirmCount >= _executionOptions.ExitConfirmSamples)
             {
-                await ClosePositionAsync(trade, "TakeProfit", ct);
+                await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
+                    TradeId: trade.Id,
+                    AttemptId: trade.AttemptId,
+                    EventType: CarryTradeEventTypes.ExitSignal,
+                    Reason: $"Take-profit confirmed: depth net edge {evaluation.NetEdgePct.Value:0.###}% <= exit threshold {_executionOptions.ExitNetEdgePct:0.###}% for {_confirmCount} samples.",
+                    Details: new
+                    {
+                        trigger = "TakeProfit",
+                        approxBboEdgePct = approxEdgePct,
+                        depthNetEdgePct = evaluation.NetEdgePct.Value,
+                        exitThresholdPct = _executionOptions.ExitNetEdgePct,
+                        confirmSamples = _confirmCount,
+                        requiredSamples = _executionOptions.ExitConfirmSamples
+                    }), ct);
+
+                await ClosePositionAsync(trade, "TakeProfit", evaluation.NetEdgePct.Value, ct);
                 ResetConfirmState();
             }
         }
@@ -173,6 +208,7 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
     private async Task ClosePositionAsync(
         CarryTrade trade,
         string reason,
+        decimal? exitNetEdgePct,
         CancellationToken ct)
     {
         var longCredentials = await _credentialService.GetSecretAsync(trade.LongConnector, ct);
@@ -183,6 +219,13 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
             _logger.LogCritical(
                 "Carry trade monitor: cannot close trade {TradeId}, missing credentials. MANUAL INTERVENTION REQUIRED - position remains open.",
                 trade.Id);
+
+            await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
+                TradeId: trade.Id,
+                AttemptId: trade.AttemptId,
+                EventType: CarryTradeEventTypes.ManualInterventionRequired,
+                Reason: "Cannot close: missing credentials for one or both connectors. Position remains open.",
+                Details: new { reason, longConnector = trade.LongConnector, shortConnector = trade.ShortConnector }), ct);
             return;
         }
 
@@ -201,12 +244,24 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
                 MaxLegDelayMs: _executionOptions.MaxLegDelayMs),
             ct);
 
+        // Record whatever legs did fill BEFORE branching on success, so partial-close detail is
+        // never lost even when the close as a whole is reported as failed.
+        await SafeRecordLegAsync(trade.Id, "Long", "Sell", trade.BaseQuantity, legResult.LongFill, ct);
+        await SafeRecordLegAsync(trade.Id, "Short", "Buy", trade.BaseQuantity, legResult.ShortFill, ct);
+
         if (!legResult.Success)
         {
             _logger.LogCritical(
                 "Carry trade monitor: failed to close trade {TradeId}: {Reason}. MANUAL INTERVENTION REQUIRED - position may still be open.",
                 trade.Id,
                 legResult.FailureReason);
+
+            await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
+                TradeId: trade.Id,
+                AttemptId: trade.AttemptId,
+                EventType: CarryTradeEventTypes.ManualInterventionRequired,
+                Reason: $"Close failed: {legResult.FailureReason}. Position may still be open.",
+                Details: new { reason, failureReason = legResult.FailureReason }), ct);
             return;
         }
 
@@ -230,8 +285,26 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
                 ExitShortPrice: exitShortPrice,
                 ExitFeesUsd: exitFeesUsd,
                 RealizedPnlUsd: realizedPnlUsd,
+                ExitNetEdgePct: exitNetEdgePct,
                 CloseReason: reason),
             ct);
+
+        await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
+            TradeId: trade.Id,
+            AttemptId: trade.AttemptId,
+            EventType: CarryTradeEventTypes.ExitFilled,
+            Reason: $"Position closed ({reason}). Realized PnL {realizedPnlUsd:0.####} USDT, exit fees {exitFeesUsd:0.####} USDT.",
+            Details: new
+            {
+                reason,
+                realizedPnlUsd,
+                exitLongPrice,
+                exitShortPrice,
+                exitFeesUsd,
+                exitNetEdgePct,
+                longLeg = ToLegDetail(legResult.LongFill),
+                shortLeg = ToLegDetail(legResult.ShortFill)
+            }), ct);
 
         _logger.LogInformation(
             "Carry trade closed. TradeId={TradeId}, Reason={Reason}, RealizedPnlUsd={RealizedPnlUsd}",
@@ -239,6 +312,70 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
             reason,
             realizedPnlUsd);
     }
+
+    private async Task SafeRecordLegAsync(
+        Guid tradeId,
+        string role,
+        string side,
+        decimal requestedQuantity,
+        OrderFillResult? fill,
+        CancellationToken ct)
+    {
+        if (fill is null || fill.FilledQuantity <= 0)
+            return;
+
+        try
+        {
+            await _repository.RecordLegAsync(
+                new RecordCarryTradeLegRequest(
+                    TradeId: tradeId,
+                    Phase: CarryTradeLegPhase.Exit,
+                    Connector: fill.ConnectorName,
+                    Role: role,
+                    Side: side,
+                    ReduceOnly: true,
+                    RequestedQuantity: requestedQuantity,
+                    FilledQuantity: fill.FilledQuantity,
+                    AverageFillPrice: fill.AverageFillPrice,
+                    FeePaidUsd: fill.FeePaidUsd,
+                    ExchangeOrderId: fill.ExchangeOrderId,
+                    ClientOrderId: fill.ClientOrderId,
+                    Status: fill.Status,
+                    FilledAt: fill.FilledAt),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to record exit leg for {TradeId} ({Role}).", tradeId, role);
+        }
+    }
+
+    private async Task SafeRecordEventAsync(
+        RecordCarryTradeEventRequest request,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _repository.RecordEventAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to record carry trade event {EventType}.", request.EventType);
+        }
+    }
+
+    private static object? ToLegDetail(OrderFillResult? fill)
+        => fill is null
+            ? null
+            : new
+            {
+                connector = fill.ConnectorName,
+                exchangeOrderId = fill.ExchangeOrderId,
+                filledQuantity = fill.FilledQuantity,
+                averageFillPrice = fill.AverageFillPrice,
+                feePaidUsd = fill.FeePaidUsd,
+                status = fill.Status
+            };
 
     private void ResetConfirmState()
     {
