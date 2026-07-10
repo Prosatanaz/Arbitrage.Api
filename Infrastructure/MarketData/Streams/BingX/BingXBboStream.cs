@@ -11,17 +11,27 @@ public sealed class BingXBboStream : BboStreamBase
 {
     private const string Connector = "bingx_perpetual";
 
+    // BingX rejects any subscription beyond 200 active topics on a single WS
+    // connection with code 80403 ("your topic num over max 200"). The shared
+    // BboStreamBase uses one connection per stream, so we cap the subscription
+    // at this limit to avoid flooding the logs with rejects for symbols that
+    // could never have been subscribed anyway.
+    private const int MaxSubscriptionTopics = 200;
+
     private readonly BestBidAskCache _cache;
+    private readonly ITradingPairUniverseProvider _universeProvider;
     private readonly ILogger<BingXBboStream> _logger;
 
     private int _successfulUpdatesLogged;
 
     public BingXBboStream(
         BestBidAskCache cache,
+        ITradingPairUniverseProvider universeProvider,
         ILogger<BingXBboStream> logger)
         : base(logger)
     {
         _cache = cache;
+        _universeProvider = universeProvider;
         _logger = logger;
     }
 
@@ -31,24 +41,78 @@ public sealed class BingXBboStream : BboStreamBase
 
     protected override int ReceiveBufferSize => 1024 * 256;
 
-    public override Task StartAsync(
+    public override async Task StartAsync(
         IReadOnlyList<string> tradingPairs,
         CancellationToken ct)
     {
-        var pairs = tradingPairs
+        var eligible = tradingPairs
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim().ToUpperInvariant())
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x)
-            .ToList();
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        if (pairs.Count == 0)
+        if (eligible.Count == 0)
         {
             _logger.LogWarning("BingX BBO stream has no trading pairs to subscribe.");
-            return Task.CompletedTask;
+            return;
         }
 
-        return base.StartAsync(pairs, ct);
+        // BingX rejects any subscription beyond MaxSubscriptionTopics on a single
+        // WS connection (BboStreamBase uses one connection per stream). When the
+        // eligible set is larger, keep the most arbitrage-relevant symbols (those
+        // listed on the most exchanges) instead of an arbitrary alphabetical slice.
+        var selected = await SelectSymbolsToSubscribeAsync(eligible, ct);
+
+        await base.StartAsync(selected, ct);
+    }
+
+    private async Task<IReadOnlyList<string>> SelectSymbolsToSubscribeAsync(
+        IReadOnlyCollection<string> eligible,
+        CancellationToken ct)
+    {
+        IReadOnlyList<string> ranked;
+
+        try
+        {
+            ranked = await _universeProvider.GetRankedTradingPairsForConnectorAsync(
+                Connector,
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "BingX BBO: failed to rank trading pairs by relevance; " +
+                "falling back to alphabetical selection.");
+
+            ranked = Array.Empty<string>();
+        }
+
+        // Keep only pairs the worker actually handed us, preserving the relevance
+        // order from the universe provider; fall back to a deterministic
+        // alphabetical order if ranking was unavailable.
+        var ordered = ranked.Where(eligible.Contains).ToList();
+
+        if (ordered.Count == 0)
+        {
+            ordered = eligible
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        if (ordered.Count <= MaxSubscriptionTopics)
+            return ordered;
+
+        _logger.LogWarning(
+            "BingX BBO subscription capped at {Max} of {Eligible} symbols " +
+            "(200-topic connection limit); kept the {Max} most cross-exchange-liquid, " +
+            "dropped {Dropped}.",
+            MaxSubscriptionTopics,
+            ordered.Count,
+            MaxSubscriptionTopics,
+            ordered.Count - MaxSubscriptionTopics);
+
+        return ordered.Take(MaxSubscriptionTopics).ToList();
     }
 
     protected override void OnConnecting()
@@ -65,9 +129,16 @@ public sealed class BingXBboStream : BboStreamBase
         IReadOnlyList<string> symbols,
         CancellationToken ct)
     {
+        // StartAsync already trims the eligible set to MaxSubscriptionTopics by
+        // arbitrage relevance; this Take is a defensive backstop so no future code
+        // path can re-introduce the 80403 "topic num over max 200" reject flood.
+        var symbolsToSubscribe = symbols.Count > MaxSubscriptionTopics
+            ? symbols.Take(MaxSubscriptionTopics).ToList()
+            : symbols;
+
         var total = 0;
 
-        foreach (var symbol in symbols)
+        foreach (var symbol in symbolsToSubscribe)
         {
             var payload = JsonSerializer.Serialize(new
             {
@@ -93,8 +164,8 @@ public sealed class BingXBboStream : BboStreamBase
 
         _logger.LogInformation(
             "BingX BBO subscribe completed. Count={Count}, Sample={Sample}",
-            symbols.Count,
-            string.Join(", ", symbols.Take(10)));
+            symbolsToSubscribe.Count,
+            string.Join(", ", symbolsToSubscribe.Take(10)));
     }
 
     protected override bool TryDecompress(

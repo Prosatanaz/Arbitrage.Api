@@ -56,6 +56,36 @@ public sealed class FileTradingPairUniverseProvider : ITradingPairUniverseProvid
             .ToList();
     }
 
+    public async Task<IReadOnlyList<string>> GetRankedTradingPairsForConnectorAsync(
+        string connectorName,
+        CancellationToken ct)
+    {
+        var items = await GetItemsAsync(ct);
+
+        // A pair whose supportedConnectors list is empty is treated as supported
+        // everywhere (see GetTradingPairsForConnectorAsync), so it is maximally
+        // relevant; otherwise rank by how many exchanges carry it (more exchanges
+        // = more cross-exchange arbitrage counterparties). Alphabetical tie-break
+        // keeps the ordering deterministic across restarts.
+        static int RelevanceScore(TradingPairUniverseItem item) =>
+            item.SupportedConnectors.Count == 0
+                ? int.MaxValue
+                : item.SupportedConnectors.Count;
+
+        return items
+            .Where(x =>
+                x.SupportedConnectors.Count == 0 ||
+                x.SupportedConnectors.Contains(
+                    connectorName,
+                    StringComparer.OrdinalIgnoreCase))
+            .Where(x => !string.IsNullOrWhiteSpace(x.TradingPair))
+            .DistinctBy(x => x.TradingPair, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(RelevanceScore)
+            .ThenBy(x => x.TradingPair, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.TradingPair)
+            .ToList();
+    }
+
     private async Task<IReadOnlyList<TradingPairUniverseItem>> GetItemsAsync(
         CancellationToken ct)
     {
