@@ -116,45 +116,61 @@ public sealed class HtxTradingClient : IExchangeTradingClient
         ExchangeApiCredentialSecret credentials,
         CancellationToken ct)
     {
-        using var document = await SendSignedPostJsonAsync(
-            path: _options.PositionInfoPath,
-            body: "{}",
-            credentials: credentials,
-            ct: ct);
-
-        EnsureHtxSuccess(document.RootElement);
-
-        var data = TryGetPropertyIgnoreCase(
-            document.RootElement,
-            "data");
-
-        var now = DateTimeOffset.UtcNow;
         var result = new List<ExchangePositionSnapshot>();
 
-        if (data.ValueKind != JsonValueKind.Array)
-            return result;
-
-        foreach (var item in data.EnumerateArray())
-        {
-            var volume = GetDecimal(item, "volume");
-
-            if (volume <= 0)
-                continue;
-
-            var direction = GetString(item, "direction") ?? "";
-
-            result.Add(new ExchangePositionSnapshot(
-                ConnectorName: ConnectorName,
-                TradingPair: GetString(item, "contract_code") ?? "",
-                Size: volume,
-                EntryPrice: GetDecimal(item, "cost_open"),
-                MarkPrice: GetDecimal(item, "last_price"),
-                UnrealizedPnl: GetDecimal(item, "profit_unreal"),
-                Side: direction,
-                ReceivedAt: now));
-        }
+        // A position shows up in exactly one of these depending on its margin mode, so both are
+        // queried; if one endpoint is not valid for the account it is skipped, not fatal.
+        await AddPositionsFromAsync(_options.PositionInfoPath, credentials, result, ct);
+        await AddPositionsFromAsync(_options.IsolatedPositionInfoPath, credentials, result, ct);
 
         return result;
+    }
+
+    private async Task AddPositionsFromAsync(
+        string path,
+        ExchangeApiCredentialSecret credentials,
+        List<ExchangePositionSnapshot> result,
+        CancellationToken ct)
+    {
+        try
+        {
+            using var document = await SendSignedPostJsonAsync(
+                path: path,
+                body: "{}",
+                credentials: credentials,
+                ct: ct);
+
+            EnsureHtxSuccess(document.RootElement);
+
+            var data = TryGetPropertyIgnoreCase(document.RootElement, "data");
+
+            if (data.ValueKind != JsonValueKind.Array)
+                return;
+
+            var now = DateTimeOffset.UtcNow;
+
+            foreach (var item in data.EnumerateArray())
+            {
+                var volume = GetDecimal(item, "volume");
+
+                if (volume <= 0)
+                    continue;
+
+                result.Add(new ExchangePositionSnapshot(
+                    ConnectorName: ConnectorName,
+                    TradingPair: GetString(item, "contract_code") ?? "",
+                    Size: volume,
+                    EntryPrice: GetDecimal(item, "cost_open"),
+                    MarkPrice: GetDecimal(item, "last_price"),
+                    UnrealizedPnl: GetDecimal(item, "profit_unreal"),
+                    Side: GetString(item, "direction") ?? "",
+                    ReceivedAt: now));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "HTX position query failed for {Path}.", path);
+        }
     }
 
     public async Task<IReadOnlyList<ExchangeOpenOrderSnapshot>> GetOpenOrdersAsync(
@@ -270,16 +286,17 @@ public sealed class HtxTradingClient : IExchangeTradingClient
     {
         for (var attempt = 0; attempt < 5; attempt++)
         {
-            var extraParameters = new Dictionary<string, string>
-            {
-                ["contract_code"] = contractCode,
-                ["order_id"] = orderId
-            };
+            // HTX swap_order_info is a POST endpoint (contract_code + order_id in the body);
+            // calling it with GET returns 405 Method Not Allowed, which previously made a
+            // successfully-placed order look unfilled and stranded the opposite leg.
+            var body = long.TryParse(orderId, out var numericOrderId)
+                ? JsonSerializer.Serialize(new { contract_code = contractCode, order_id = numericOrderId })
+                : JsonSerializer.Serialize(new { contract_code = contractCode, order_id = orderId });
 
-            using var document = await SendSignedGetJsonAsync(
+            using var document = await SendSignedPostJsonAsync(
                 path: _options.OrderInfoPath,
+                body: body,
                 credentials: credentials,
-                extraParameters: extraParameters,
                 ct: ct);
 
             EnsureHtxSuccess(document.RootElement);

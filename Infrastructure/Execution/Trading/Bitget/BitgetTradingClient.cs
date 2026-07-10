@@ -131,18 +131,38 @@ public sealed class BitgetTradingClient : IExchangeTradingClient
                 $"Bitget symbol could not be derived for trading pair '{request.TradingPair}'.");
         }
 
-        var body = JsonSerializer.Serialize(new
+        var isBuyRequest = request.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase);
+        var isHedgeMode = _options.PositionMode.Equals("hedge", StringComparison.OrdinalIgnoreCase);
+
+        var orderBody = new Dictionary<string, object>
         {
-            symbol = exchangeSymbol,
-            productType = _options.ProductType,
-            marginMode = _options.MarginMode,
-            marginCoin = _options.MarginCoin,
-            size = request.Quantity.ToString(CultureInfo.InvariantCulture),
-            side = request.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? "buy" : "sell",
-            orderType = "market",
-            clientOid = request.ClientOrderId,
-            reduceOnly = request.ReduceOnly ? "YES" : "NO"
-        });
+            ["symbol"] = exchangeSymbol,
+            ["productType"] = _options.ProductType,
+            ["marginMode"] = _options.MarginMode,
+            ["marginCoin"] = _options.MarginCoin,
+            ["size"] = request.Quantity.ToString(CultureInfo.InvariantCulture),
+            ["orderType"] = "market",
+            ["clientOid"] = request.ClientOrderId
+        };
+
+        if (isHedgeMode)
+        {
+            // Two-way mode: side is the POSITION direction and tradeSide is open/close. A close
+            // uses the SAME side as the open (close long = side buy + close), so when the executor
+            // asks to close via the opposite side + reduceOnly we flip it back to the position side.
+            orderBody["tradeSide"] = request.ReduceOnly ? "close" : "open";
+            orderBody["side"] = request.ReduceOnly
+                ? (isBuyRequest ? "sell" : "buy")
+                : (isBuyRequest ? "buy" : "sell");
+        }
+        else
+        {
+            // One-way (unilateral) mode: plain side + reduceOnly, no tradeSide.
+            orderBody["side"] = isBuyRequest ? "buy" : "sell";
+            orderBody["reduceOnly"] = request.ReduceOnly ? "YES" : "NO";
+        }
+
+        var body = JsonSerializer.Serialize(orderBody);
 
         var createResponse = await SendSignedPostAsync<BitgetEnvelope<BitgetOrderCreateData>>(
             path: "/api/v2/mix/order/place-order",

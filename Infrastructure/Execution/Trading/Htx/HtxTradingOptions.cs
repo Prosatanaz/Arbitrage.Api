@@ -20,5 +20,9 @@ public sealed class HtxTradingOptions
     // documented linear-swap shape; verify against the live API before relying on the numbers.
     public string PositionInfoPath { get; init; } = "/linear-swap-api/v1/swap_cross_position_info";
 
+    // Isolated-margin positions live under a separate endpoint; a position opened in isolated mode
+    // does not show up in the cross endpoint, so both are queried and merged.
+    public string IsolatedPositionInfoPath { get; init; } = "/linear-swap-api/v1/swap_position_info";
+
     public string OpenOrdersPath { get; init; } = "/linear-swap-api/v1/swap_cross_openorders";
 }
