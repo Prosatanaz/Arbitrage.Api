@@ -13,6 +13,17 @@ export function formatNumber(value: number | null | undefined) {
     return value.toLocaleString('en-US')
 }
 
+export function formatDecimal(value: number | null | undefined, maxDigits = 4) {
+    if (value === null || value === undefined || Number.isNaN(value)) return '—'
+    return value.toLocaleString('en-US', { maximumFractionDigits: maxDigits })
+}
+
+export function formatSignedUsd(value: number | null | undefined, digits = 2) {
+    if (value === null || value === undefined || Number.isNaN(value)) return '—'
+    const sign = value > 0 ? '+' : ''
+    return `${sign}${value.toFixed(digits)} USDT`
+}
+
 export function formatAge(ms: number | null | undefined) {
     if (ms === null || ms === undefined || Number.isNaN(ms)) return '—'
     if (ms < 1000) return `${Math.round(ms)} ms`

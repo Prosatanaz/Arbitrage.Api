@@ -109,13 +109,76 @@ public sealed class BybitTradingClient : IExchangeTradingClient
         return result;
     }
 
-    public Task<IReadOnlyList<ExchangePositionSnapshot>> GetPositionsAsync(
+    public async Task<IReadOnlyList<ExchangePositionSnapshot>> GetPositionsAsync(
         ExchangeApiCredentialSecret credentials,
         CancellationToken ct)
     {
-        IReadOnlyList<ExchangePositionSnapshot> result = [];
+        var queryString =
+            $"category={Uri.EscapeDataString(_options.Category)}&settleCoin=USDT";
 
-        return Task.FromResult(result);
+        var response = await SendSignedGetAsync<BybitPositionListResponse>(
+            path: "v5/position/list",
+            queryString: queryString,
+            credentials: credentials,
+            ct: ct);
+
+        var now = DateTimeOffset.UtcNow;
+        var result = new List<ExchangePositionSnapshot>();
+
+        foreach (var item in response.Result?.List ?? [])
+        {
+            var size = ParseDecimal(item.Size);
+
+            // Bybit returns a row per symbol even with zero size; only surface live exposure.
+            if (size <= 0)
+                continue;
+
+            result.Add(new ExchangePositionSnapshot(
+                ConnectorName: ConnectorName,
+                TradingPair: item.Symbol ?? "",
+                Size: size,
+                EntryPrice: ParseDecimal(item.AvgPrice),
+                MarkPrice: ParseDecimal(item.MarkPrice),
+                UnrealizedPnl: ParseDecimal(item.UnrealisedPnl),
+                Side: item.Side ?? "",
+                ReceivedAt: now));
+        }
+
+        return result;
+    }
+
+    public async Task<IReadOnlyList<ExchangeOpenOrderSnapshot>> GetOpenOrdersAsync(
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        var queryString =
+            $"category={Uri.EscapeDataString(_options.Category)}&settleCoin=USDT&openOnly=0&limit=50";
+
+        var response = await SendSignedGetAsync<BybitOpenOrderResponse>(
+            path: "v5/order/realtime",
+            queryString: queryString,
+            credentials: credentials,
+            ct: ct);
+
+        var result = new List<ExchangeOpenOrderSnapshot>();
+
+        foreach (var item in response.Result?.List ?? [])
+        {
+            result.Add(new ExchangeOpenOrderSnapshot(
+                ConnectorName: ConnectorName,
+                ExchangeOrderId: item.OrderId ?? "",
+                TradingPair: item.Symbol ?? "",
+                Side: item.Side ?? "",
+                OrderType: item.OrderType ?? "",
+                Price: ParseDecimal(item.Price),
+                Quantity: ParseDecimal(item.Qty),
+                FilledQuantity: ParseDecimal(item.CumExecQty),
+                ReduceOnly: item.ReduceOnly ?? false,
+                Status: item.OrderStatus ?? "",
+                CreatedAt: ParseUnixMs(item.CreatedTime)));
+        }
+
+        return result;
     }
 
     public async Task<OrderFillResult> PlaceOrderAsync(
@@ -434,6 +497,20 @@ public sealed class BybitTradingClient : IExchangeTradingClient
         return null;
     }
 
+    private static DateTimeOffset ParseUnixMs(string? value)
+    {
+        if (long.TryParse(
+                value,
+                NumberStyles.Any,
+                CultureInfo.InvariantCulture,
+                out var ms) && ms > 0)
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(ms);
+        }
+
+        return DateTimeOffset.UtcNow;
+    }
+
     private interface IBybitResponseEnvelope
     {
         int RetCode { get; }
@@ -518,6 +595,72 @@ public sealed class BybitTradingClient : IExchangeTradingClient
         public string? ExecPrice { get; set; }
 
         public string? ExecFee { get; set; }
+    }
+
+    private sealed class BybitPositionListResponse : IBybitResponseEnvelope
+    {
+        public int RetCode { get; set; }
+
+        public string RetMsg { get; set; } = "";
+
+        public BybitPositionListResult? Result { get; set; }
+    }
+
+    private sealed class BybitPositionListResult
+    {
+        public List<BybitPosition>? List { get; set; }
+    }
+
+    private sealed class BybitPosition
+    {
+        public string? Symbol { get; set; }
+
+        public string? Side { get; set; }
+
+        public string? Size { get; set; }
+
+        public string? AvgPrice { get; set; }
+
+        public string? MarkPrice { get; set; }
+
+        public string? UnrealisedPnl { get; set; }
+    }
+
+    private sealed class BybitOpenOrderResponse : IBybitResponseEnvelope
+    {
+        public int RetCode { get; set; }
+
+        public string RetMsg { get; set; } = "";
+
+        public BybitOpenOrderResult? Result { get; set; }
+    }
+
+    private sealed class BybitOpenOrderResult
+    {
+        public List<BybitOpenOrder>? List { get; set; }
+    }
+
+    private sealed class BybitOpenOrder
+    {
+        public string? OrderId { get; set; }
+
+        public string? Symbol { get; set; }
+
+        public string? Side { get; set; }
+
+        public string? OrderType { get; set; }
+
+        public string? Price { get; set; }
+
+        public string? Qty { get; set; }
+
+        public string? CumExecQty { get; set; }
+
+        public bool? ReduceOnly { get; set; }
+
+        public string? OrderStatus { get; set; }
+
+        public string? CreatedTime { get; set; }
     }
 
     private sealed class BybitInstrumentsInfoResponse : IBybitResponseEnvelope

@@ -88,28 +88,16 @@ public sealed class HtxTradingClient : IExchangeTradingClient
             document.RootElement,
             "data");
 
-        var walletBalance = FindFirstDecimal(
-            dataElement,
-            "margin_balance",
-            "margin_static",
-            "total_margin_balance",
-            "total_asset",
-            "balance",
-            "account_balance");
+        // v3 unified_account_info returns data as an array with one entry per margin asset
+        // (HUSD, BTC, ETH, USDT, ...). We must pick the USDT entry explicitly - a blind
+        // recursive search returns the first asset's (usually zero) balance, not USDT's.
+        var usdtAccount = FindMarginAsset(dataElement, "USDT");
 
-        var availableBalance = FindFirstDecimal(
-            dataElement,
-            "withdraw_available",
-            "available_balance",
-            "margin_available",
-            "available");
+        var walletBalance = GetDecimal(usdtAccount, "margin_balance");
+        var availableBalance = GetDecimal(usdtAccount, "withdraw_available");
 
-        var equity = FindFirstDecimal(
-            dataElement,
-            "margin_balance",
-            "total_margin_balance",
-            "equity",
-            "total_asset");
+        if (availableBalance <= 0)
+            availableBalance = GetDecimal(usdtAccount, "margin_available");
 
         return
         [
@@ -118,19 +106,104 @@ public sealed class HtxTradingClient : IExchangeTradingClient
                 Asset: "USDT",
                 WalletBalance: walletBalance,
                 AvailableBalance: availableBalance,
-                Equity: equity,
-                UsdValue: equity,
+                Equity: walletBalance,
+                UsdValue: walletBalance,
                 ReceivedAt: now)
         ];
     }
 
-    public Task<IReadOnlyList<ExchangePositionSnapshot>> GetPositionsAsync(
+    public async Task<IReadOnlyList<ExchangePositionSnapshot>> GetPositionsAsync(
         ExchangeApiCredentialSecret credentials,
         CancellationToken ct)
     {
-        IReadOnlyList<ExchangePositionSnapshot> result = [];
+        using var document = await SendSignedPostJsonAsync(
+            path: _options.PositionInfoPath,
+            body: "{}",
+            credentials: credentials,
+            ct: ct);
 
-        return Task.FromResult(result);
+        EnsureHtxSuccess(document.RootElement);
+
+        var data = TryGetPropertyIgnoreCase(
+            document.RootElement,
+            "data");
+
+        var now = DateTimeOffset.UtcNow;
+        var result = new List<ExchangePositionSnapshot>();
+
+        if (data.ValueKind != JsonValueKind.Array)
+            return result;
+
+        foreach (var item in data.EnumerateArray())
+        {
+            var volume = GetDecimal(item, "volume");
+
+            if (volume <= 0)
+                continue;
+
+            var direction = GetString(item, "direction") ?? "";
+
+            result.Add(new ExchangePositionSnapshot(
+                ConnectorName: ConnectorName,
+                TradingPair: GetString(item, "contract_code") ?? "",
+                Size: volume,
+                EntryPrice: GetDecimal(item, "cost_open"),
+                MarkPrice: GetDecimal(item, "last_price"),
+                UnrealizedPnl: GetDecimal(item, "profit_unreal"),
+                Side: direction,
+                ReceivedAt: now));
+        }
+
+        return result;
+    }
+
+    public async Task<IReadOnlyList<ExchangeOpenOrderSnapshot>> GetOpenOrdersAsync(
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        using var document = await SendSignedPostJsonAsync(
+            path: _options.OpenOrdersPath,
+            body: "{}",
+            credentials: credentials,
+            ct: ct);
+
+        EnsureHtxSuccess(document.RootElement);
+
+        var data = TryGetPropertyIgnoreCase(
+            document.RootElement,
+            "data");
+
+        // HTX wraps the list under data.orders; fall back to data itself if it is already an array.
+        var orders = TryGetPropertyIgnoreCase(data, "orders");
+
+        if (orders.ValueKind != JsonValueKind.Array)
+            orders = data;
+
+        var result = new List<ExchangeOpenOrderSnapshot>();
+
+        if (orders.ValueKind != JsonValueKind.Array)
+            return result;
+
+        foreach (var item in orders.EnumerateArray())
+        {
+            var reduceOnly = (GetString(item, "offset") ?? "")
+                .Equals("close", StringComparison.OrdinalIgnoreCase);
+
+            result.Add(new ExchangeOpenOrderSnapshot(
+                ConnectorName: ConnectorName,
+                ExchangeOrderId: GetString(item, "order_id_str") ?? GetString(item, "order_id") ?? "",
+                TradingPair: GetString(item, "contract_code") ?? "",
+                Side: GetString(item, "direction") ?? "",
+                OrderType: GetString(item, "order_price_type") ?? "",
+                Price: GetDecimal(item, "price"),
+                Quantity: GetDecimal(item, "volume"),
+                FilledQuantity: GetDecimal(item, "trade_volume"),
+                ReduceOnly: reduceOnly,
+                Status: GetString(item, "status") ?? "",
+                CreatedAt: ParseUnixMs(item, "created_at")));
+        }
+
+        return result;
     }
 
     // NOTE: field names follow HTX's documented linear-swap order/order-info shape as of this
@@ -499,68 +572,46 @@ public sealed class HtxTradingClient : IExchangeTradingClient
         return ParseDecimal(property);
     }
 
-    private static decimal FindFirstDecimal(
-        JsonElement element,
-        params string[] propertyNames)
-    {
-        foreach (var propertyName in propertyNames)
-        {
-            var value = FindDecimalRecursive(
-                element,
-                propertyName);
-
-            if (value is not null)
-                return value.Value;
-        }
-
-        return 0m;
-    }
-
-    private static decimal? FindDecimalRecursive(
+    private static DateTimeOffset ParseUnixMs(
         JsonElement element,
         string propertyName)
     {
-        switch (element.ValueKind)
+        var property = TryGetPropertyIgnoreCase(
+            element,
+            propertyName);
+
+        long ms = 0;
+
+        if (property.ValueKind == JsonValueKind.Number)
+            property.TryGetInt64(out ms);
+        else if (property.ValueKind == JsonValueKind.String)
+            long.TryParse(property.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out ms);
+
+        return ms > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(ms)
+            : DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>
+    /// Selects the account entry for a given margin asset (e.g. "USDT") out of HTX's
+    /// per-asset <c>data</c> array. Returns <c>default</c> if the array or asset is absent.
+    /// </summary>
+    private static JsonElement FindMarginAsset(
+        JsonElement dataElement,
+        string marginAsset)
+    {
+        if (dataElement.ValueKind != JsonValueKind.Array)
+            return default;
+
+        foreach (var item in dataElement.EnumerateArray())
         {
-            case JsonValueKind.Object:
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (property.Name.Equals(
-                            propertyName,
-                            StringComparison.OrdinalIgnoreCase))
-                    {
-                        var parsed = ParseNullableDecimal(property.Value);
+            var asset = GetString(item, "margin_asset");
 
-                        if (parsed is not null)
-                            return parsed;
-                    }
-
-                    var nested = FindDecimalRecursive(
-                        property.Value,
-                        propertyName);
-
-                    if (nested is not null)
-                        return nested;
-                }
-
-                return null;
-
-            case JsonValueKind.Array:
-                foreach (var item in element.EnumerateArray())
-                {
-                    var nested = FindDecimalRecursive(
-                        item,
-                        propertyName);
-
-                    if (nested is not null)
-                        return nested;
-                }
-
-                return null;
-
-            default:
-                return null;
+            if (string.Equals(asset, marginAsset, StringComparison.OrdinalIgnoreCase))
+                return item;
         }
+
+        return default;
     }
 
     private static decimal ParseDecimal(JsonElement element)

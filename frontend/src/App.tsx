@@ -3,12 +3,14 @@ import './styles.css'
 import MonitoringPage from './MonitoringPage'
 import TradingPage from './TradingPage'
 import ConnectorsPage from './ConnectorsPage'
+import AccountsPage from './AccountsPage'
 
-type View = 'monitoring' | 'trading' | 'connectors'
+type View = 'monitoring' | 'trading' | 'accounts' | 'connectors'
 
 const TABS: { view: View; label: string }[] = [
     { view: 'monitoring', label: 'Monitoring' },
     { view: 'trading', label: 'Trading' },
+    { view: 'accounts', label: 'Accounts' },
     { view: 'connectors', label: 'Connectors' },
 ]
 
@@ -31,6 +33,7 @@ function App() {
 
             {view === 'monitoring' && <MonitoringPage />}
             {view === 'trading' && <TradingPage />}
+            {view === 'accounts' && <AccountsPage />}
             {view === 'connectors' && <ConnectorsPage />}
         </>
     )

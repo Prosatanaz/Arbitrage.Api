@@ -19,6 +19,19 @@ public sealed record ExchangePositionSnapshot(
     string Side,
     DateTimeOffset ReceivedAt);
 
+public sealed record ExchangeOpenOrderSnapshot(
+    string ConnectorName,
+    string ExchangeOrderId,
+    string TradingPair,
+    string Side,
+    string OrderType,
+    decimal Price,
+    decimal Quantity,
+    decimal FilledQuantity,
+    bool ReduceOnly,
+    string Status,
+    DateTimeOffset CreatedAt);
+
 public sealed record ExchangeSymbolRules(
     string ConnectorName,
     string TradingPair,

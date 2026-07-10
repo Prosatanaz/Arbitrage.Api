@@ -18,6 +18,16 @@ public interface IExchangeTradingClient
         ExchangeApiCredentialSecret credentials,
         CancellationToken ct);
 
+    /// <summary>
+    /// Open (resting / not-yet-fully-filled) orders on the exchange. Defaults to an empty list
+    /// so unverified connectors need no per-exchange work; only production-trusted clients
+    /// (Bybit, HTX) override this with a real signed query. Read-only.
+    /// </summary>
+    Task<IReadOnlyList<ExchangeOpenOrderSnapshot>> GetOpenOrdersAsync(
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ExchangeOpenOrderSnapshot>>([]);
+
     Task<ExchangeSymbolRules?> GetSymbolRulesAsync(
         string tradingPair,
         CancellationToken ct);
