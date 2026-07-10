@@ -29,6 +29,13 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
     private Guid? _confirmTradeId;
     private int _confirmCount;
 
+    // Bounds how many times a failing close is retried before the trade is given up on and
+    // marked Failed - without this a stuck close retries every tick forever, hammering the
+    // exchange APIs with rejected reduce-only orders and spamming the event log.
+    private const int MaxCloseAttempts = 5;
+    private Guid? _closeTradeId;
+    private int _closeAttempts;
+
     public CarryTradePositionMonitorWorker(
         ICarryTradeRepository repository,
         BestBidAskCache bboCache,
@@ -77,17 +84,22 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
         if (trade is null)
         {
             ResetConfirmState();
+            ResetCloseState();
             return;
         }
 
         if (trade.Status == CarryTradeStatus.Closing)
         {
-            await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
-                TradeId: trade.Id,
-                AttemptId: trade.AttemptId,
-                EventType: CarryTradeEventTypes.ExitSignal,
-                Reason: "Manual close requested; closing position.",
-                Details: new { trigger = "Manual" }), ct);
+            // Log the exit signal only on the first tick of this close cycle, not every retry.
+            if (_closeTradeId != trade.Id)
+            {
+                await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
+                    TradeId: trade.Id,
+                    AttemptId: trade.AttemptId,
+                    EventType: CarryTradeEventTypes.ExitSignal,
+                    Reason: "Manual close requested; closing position.",
+                    Details: new { trigger = "Manual" }), ct);
+            }
 
             await ClosePositionAsync(trade, "Manual", null, ct);
             ResetConfirmState();
@@ -211,21 +223,18 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
         decimal? exitNetEdgePct,
         CancellationToken ct)
     {
+        if (_closeTradeId != trade.Id)
+        {
+            _closeTradeId = trade.Id;
+            _closeAttempts = 0;
+        }
+
         var longCredentials = await _credentialService.GetSecretAsync(trade.LongConnector, ct);
         var shortCredentials = await _credentialService.GetSecretAsync(trade.ShortConnector, ct);
 
         if (longCredentials is null || shortCredentials is null)
         {
-            _logger.LogCritical(
-                "Carry trade monitor: cannot close trade {TradeId}, missing credentials. MANUAL INTERVENTION REQUIRED - position remains open.",
-                trade.Id);
-
-            await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
-                TradeId: trade.Id,
-                AttemptId: trade.AttemptId,
-                EventType: CarryTradeEventTypes.ManualInterventionRequired,
-                Reason: "Cannot close: missing credentials for one or both connectors. Position remains open.",
-                Details: new { reason, longConnector = trade.LongConnector, shortConnector = trade.ShortConnector }), ct);
+            await HandleCloseFailureAsync(trade, reason, "missing credentials for one or both connectors", ct);
             return;
         }
 
@@ -251,17 +260,7 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
 
         if (!legResult.Success)
         {
-            _logger.LogCritical(
-                "Carry trade monitor: failed to close trade {TradeId}: {Reason}. MANUAL INTERVENTION REQUIRED - position may still be open.",
-                trade.Id,
-                legResult.FailureReason);
-
-            await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
-                TradeId: trade.Id,
-                AttemptId: trade.AttemptId,
-                EventType: CarryTradeEventTypes.ManualInterventionRequired,
-                Reason: $"Close failed: {legResult.FailureReason}. Position may still be open.",
-                Details: new { reason, failureReason = legResult.FailureReason }), ct);
+            await HandleCloseFailureAsync(trade, reason, legResult.FailureReason ?? "close failed", ct);
             return;
         }
 
@@ -311,6 +310,68 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
             trade.Id,
             reason,
             realizedPnlUsd);
+
+        ResetCloseState();
+    }
+
+    /// <summary>
+    /// Handles a failed close attempt: retries a bounded number of times, then gives up by marking
+    /// the trade Failed (so it leaves the open/closing set and the monitor stops retrying) and
+    /// flags for manual verification exactly once, instead of looping forever.
+    /// </summary>
+    private async Task HandleCloseFailureAsync(
+        CarryTrade trade,
+        string reason,
+        string failureDetail,
+        CancellationToken ct)
+    {
+        _closeAttempts++;
+
+        if (_closeAttempts < MaxCloseAttempts)
+        {
+            _logger.LogWarning(
+                "Carry trade monitor: close attempt {Attempt}/{Max} for trade {TradeId} failed ({Detail}); will retry.",
+                _closeAttempts,
+                MaxCloseAttempts,
+                trade.Id,
+                failureDetail);
+            return;
+        }
+
+        _logger.LogCritical(
+            "Carry trade monitor: close failed {Attempts} times for trade {TradeId} ({Detail}). Marking Failed. MANUAL INTERVENTION REQUIRED - verify no position remains on {Long}/{Short}.",
+            _closeAttempts,
+            trade.Id,
+            failureDetail,
+            trade.LongConnector,
+            trade.ShortConnector);
+
+        await SafeRecordEventAsync(new RecordCarryTradeEventRequest(
+            TradeId: trade.Id,
+            AttemptId: trade.AttemptId,
+            EventType: CarryTradeEventTypes.ManualInterventionRequired,
+            Reason: $"Close failed {_closeAttempts} times ({failureDetail}); trade marked Failed. Verify exchanges are flat.",
+            Details: new { reason, failureDetail, attempts = _closeAttempts }), ct);
+
+        try
+        {
+            await _repository.MarkFailedAsync(
+                trade.Id,
+                $"Close failed after {_closeAttempts} attempts: {failureDetail}",
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to mark trade {TradeId} as Failed after exhausting close attempts.", trade.Id);
+        }
+
+        ResetCloseState();
+    }
+
+    private void ResetCloseState()
+    {
+        _closeTradeId = null;
+        _closeAttempts = 0;
     }
 
     private async Task SafeRecordLegAsync(
