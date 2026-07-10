@@ -87,6 +87,14 @@ public sealed class CarryTradeLegExecutor
         var longFilledQty = longFill?.FilledQuantity ?? 0m;
         var shortFilledQty = shortFill?.FilledQuantity ?? 0m;
 
+        // A leg that threw an exception (rather than cleanly reporting a 0 fill) is in an UNKNOWN
+        // state: the order may have been placed and filled on the exchange even though we could not
+        // read the result. Treating that as "unfilled" is what strands a naked leg. For any such
+        // ambiguous leg we fire a reduce-only safety-close: if a position exists it is closed; if
+        // the account is flat the reduce-only order is a harmless no-op.
+        var longAmbiguous = longFilledQty <= 0 && longError is not null;
+        var shortAmbiguous = shortFilledQty <= 0 && shortError is not null;
+
         if (longFilledQty <= 0 && shortFilledQty <= 0)
         {
             _logger.LogError(
@@ -94,6 +102,11 @@ public sealed class CarryTradeLegExecutor
                 "Both legs failed to fill for attempt {ClientOrderId} on {TradingPair}.",
                 request.ClientOrderId,
                 request.TradingPair);
+
+            if (longAmbiguous)
+                await SafetyCloseAmbiguousLegAsync(longClient, request.LongCredentials, request.TradingPair, OppositeSide(request.LongSide), request.Quantity, request.ClientOrderId, ct);
+            if (shortAmbiguous)
+                await SafetyCloseAmbiguousLegAsync(shortClient, request.ShortCredentials, request.TradingPair, OppositeSide(request.ShortSide), request.Quantity, request.ClientOrderId, ct);
 
             return new LegExecutionResult(false, 0m, longFill, shortFill, "Both legs failed to fill.");
         }
@@ -107,6 +120,9 @@ public sealed class CarryTradeLegExecutor
 
             await UnwindAsync(shortClient, request.ShortCredentials, request.TradingPair, OppositeSide(request.ShortSide), shortFilledQty, request.ClientOrderId, ct);
 
+            if (longAmbiguous)
+                await SafetyCloseAmbiguousLegAsync(longClient, request.LongCredentials, request.TradingPair, OppositeSide(request.LongSide), request.Quantity, request.ClientOrderId, ct);
+
             return new LegExecutionResult(false, 0m, longFill, shortFill, "Long leg failed to fill; short leg unwound.");
         }
 
@@ -118,6 +134,9 @@ public sealed class CarryTradeLegExecutor
                 request.ClientOrderId);
 
             await UnwindAsync(longClient, request.LongCredentials, request.TradingPair, OppositeSide(request.LongSide), longFilledQty, request.ClientOrderId, ct);
+
+            if (shortAmbiguous)
+                await SafetyCloseAmbiguousLegAsync(shortClient, request.ShortCredentials, request.TradingPair, OppositeSide(request.ShortSide), request.Quantity, request.ClientOrderId, ct);
 
             return new LegExecutionResult(false, 0m, longFill, shortFill, "Short leg failed to fill; long leg unwound.");
         }
@@ -165,6 +184,54 @@ public sealed class CarryTradeLegExecutor
                 client.ConnectorName,
                 quantity,
                 side);
+        }
+    }
+
+    /// <summary>
+    /// Fires a reduce-only close for a leg whose placement outcome is unknown (the client threw
+    /// rather than reporting a clean fill). Reduce-only makes this safe when the account is flat -
+    /// the exchange treats it as a no-op - while guaranteeing any position that actually opened is
+    /// closed, so an ambiguous error can never leave a naked leg. Uses the full requested quantity;
+    /// reduce-only caps the close at the real position size.
+    /// </summary>
+    private async Task SafetyCloseAmbiguousLegAsync(
+        IExchangeTradingClient client,
+        ExchangeApiCredentialSecret credentials,
+        string tradingPair,
+        string side,
+        decimal quantity,
+        string clientOrderId,
+        CancellationToken ct)
+    {
+        if (quantity <= 0)
+            return;
+
+        _logger.LogWarning(
+            "Ambiguous leg on {ConnectorName} for attempt {ClientOrderId} (order may have placed but could not be confirmed) - firing reduce-only safety close of up to {Quantity} ({Side}).",
+            client.ConnectorName,
+            clientOrderId,
+            quantity,
+            side);
+
+        try
+        {
+            await client.PlaceOrderAsync(
+                credentials,
+                new PlaceOrderRequest(tradingPair, side, quantity, true, $"{clientOrderId}-SAFETY"),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            // A reduce-only reject usually just means the account was flat (nothing to close) - the
+            // safe outcome. But we cannot fully distinguish that from a failed close of a real
+            // position, so flag it for a human to verify against the exchange.
+            _logger.LogError(
+                ex,
+                "Reduce-only safety close on {ConnectorName} for attempt {ClientOrderId} was rejected. Most likely the leg never opened (safe), but VERIFY there is no naked {Side} position of ~{Quantity} left open.",
+                client.ConnectorName,
+                clientOrderId,
+                side,
+                quantity);
         }
     }
 

@@ -30,7 +30,7 @@ public class CarryTradeLegExecutorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_OneLegFails_UnwindsTheOtherLegAndReturnsFailure()
+    public async Task ExecuteAsync_OneLegFails_UnwindsFilledLegAndSafetyClosesAmbiguousLeg()
     {
         var longClient = new FakeExchangeTradingClient("long", request => Filled(request, request.Quantity));
         var shortClient = new FakeExchangeTradingClient("short", _ => throw new InvalidOperationException("exchange rejected order"));
@@ -52,7 +52,13 @@ public class CarryTradeLegExecutorTests
         Assert.True(unwindOrder.ReduceOnly);
         Assert.Equal(10m, unwindOrder.Quantity);
 
-        Assert.Single(shortClient.PlacedOrders);
+        // The short leg threw (ambiguous - the order may have placed but the result couldn't be
+        // read), so a reduce-only safety close is fired on it to guarantee it can't be left naked.
+        Assert.Equal(2, shortClient.PlacedOrders.Count);
+        var safetyOrder = shortClient.PlacedOrders[1];
+        Assert.Equal("Buy", safetyOrder.Side);
+        Assert.True(safetyOrder.ReduceOnly);
+        Assert.Equal(10m, safetyOrder.Quantity);
     }
 
     [Fact]
@@ -82,7 +88,7 @@ public class CarryTradeLegExecutorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_BothLegsFail_ReturnsFailureWithoutUnwinding()
+    public async Task ExecuteAsync_BothLegsThrow_SafetyClosesBothAmbiguousLegs()
     {
         var longClient = new FakeExchangeTradingClient("long", _ => throw new InvalidOperationException("boom"));
         var shortClient = new FakeExchangeTradingClient("short", _ => throw new InvalidOperationException("boom"));
@@ -94,8 +100,16 @@ public class CarryTradeLegExecutorTests
             CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Single(longClient.PlacedOrders);
-        Assert.Single(shortClient.PlacedOrders);
+
+        // Both legs threw, so both are in an unknown state - each gets a reduce-only safety close
+        // (opposite side) so neither placement can be left behind as a naked position.
+        Assert.Equal(2, longClient.PlacedOrders.Count);
+        Assert.Equal("Sell", longClient.PlacedOrders[1].Side);
+        Assert.True(longClient.PlacedOrders[1].ReduceOnly);
+
+        Assert.Equal(2, shortClient.PlacedOrders.Count);
+        Assert.Equal("Buy", shortClient.PlacedOrders[1].Side);
+        Assert.True(shortClient.PlacedOrders[1].ReduceOnly);
     }
 
     private static CarryTradeLegExecutor CreateExecutor(
