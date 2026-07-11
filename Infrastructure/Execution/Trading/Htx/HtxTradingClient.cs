@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -16,6 +17,11 @@ public sealed class HtxTradingClient : IExchangeTradingClient
     private readonly HtxTradingOptions _options;
     private readonly HtxAuthSigner _signer;
     private readonly ILogger<HtxTradingClient> _logger;
+
+    // HTX order/fill volume is denominated in CONTRACTS, where 1 contract = contract_size base-asset
+    // units. The rest of the system works in base-asset units, so this client converts both ways and
+    // caches contract_size per contract_code (it is a static instrument property).
+    private readonly ConcurrentDictionary<string, decimal> _contractSizeCache = new(StringComparer.OrdinalIgnoreCase);
 
     public HtxTradingClient(
         HttpClient httpClient,
@@ -35,6 +41,9 @@ public sealed class HtxTradingClient : IExchangeTradingClient
     }
 
     public string ConnectorName => "htx_perpetual";
+
+    // Real signed position query (cross + isolated, merged) - trusted to confirm the account is flat.
+    public bool SupportsPositionReads => true;
 
     public async Task<ExchangeConnectionCheckResult> CheckConnectionAsync(
         ExchangeApiCredentialSecret credentials,
@@ -234,6 +243,19 @@ public sealed class HtxTradingClient : IExchangeTradingClient
         var contractCode = InstrumentFilterService.NormalizeTradingPair(request.TradingPair);
         var clientOrderId = ToHtxClientOrderId(request.ClientOrderId);
 
+        // HTX order volume is in CONTRACTS, not base-asset units. Convert from the base-asset
+        // quantity the rest of the system uses (1 contract = contract_size base units), rounding
+        // DOWN so we never exceed the intended notional. A request that maps to less than one whole
+        // contract cannot be placed on HTX - fail loudly rather than silently distort the hedge.
+        var contractSize = await GetContractSizeAsync(contractCode, ct);
+        var volumeContracts = HtxContractConversion.BaseToContracts(request.Quantity, contractSize);
+
+        if (volumeContracts <= 0)
+        {
+            throw new InvalidOperationException(
+                $"HTX order for {contractCode} rounds to 0 contracts (requested {request.Quantity} base units, contract_size {contractSize}); below the minimum tradable size.");
+        }
+
         var body = JsonSerializer.Serialize(new
         {
             contract_code = contractCode,
@@ -241,7 +263,7 @@ public sealed class HtxTradingClient : IExchangeTradingClient
             direction = request.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? "buy" : "sell",
             offset = request.ReduceOnly ? "close" : "open",
             lever_rate = 1,
-            volume = (long)request.Quantity,
+            volume = volumeContracts,
             order_price_type = "optimal_20_ioc",
             reduce_only = request.ReduceOnly ? 1 : 0
         });
@@ -260,9 +282,11 @@ public sealed class HtxTradingClient : IExchangeTradingClient
 
         var orderId = GetString(createData, "order_id_str") ?? GetString(createData, "order_id") ?? "";
 
+        // Fills come back already converted from contracts to base-asset units.
         var fill = await GetOrderFillWithRetryAsync(
             contractCode,
             orderId,
+            contractSize,
             credentials,
             ct);
 
@@ -281,10 +305,16 @@ public sealed class HtxTradingClient : IExchangeTradingClient
     private async Task<(decimal FilledQuantity, decimal AveragePrice, decimal FeePaid)> GetOrderFillWithRetryAsync(
         string contractCode,
         string orderId,
+        decimal contractSize,
         ExchangeApiCredentialSecret credentials,
         CancellationToken ct)
     {
-        for (var attempt = 0; attempt < 5; attempt++)
+        // optimal_20_ioc is immediate-or-cancel, so the order is terminal on HTX almost at once and
+        // the fill is usually readable on the first (immediate) poll. Keep the between-poll sleep
+        // short and the attempt count modest so the whole place+confirm chain stays well inside
+        // ExecutionOptions.MaxLegDelayMs - a long sleep here is what pushed HTX past the leg budget
+        // and got filled orders canceled mid-confirmation and misreported as "failed to fill".
+        for (var attempt = 0; attempt < 6; attempt++)
         {
             // HTX swap_order_info is a POST endpoint (contract_code + order_id in the body);
             // calling it with GET returns 405 Method Not Allowed, which previously made a
@@ -309,21 +339,24 @@ public sealed class HtxTradingClient : IExchangeTradingClient
                 ? data[0]
                 : default;
 
-            var filledQuantity = GetDecimal(order, "trade_volume");
+            var filledContracts = GetDecimal(order, "trade_volume");
 
-            if (filledQuantity > 0)
+            if (filledContracts > 0)
             {
+                // Convert contracts back to base-asset units so the rest of the system (leg
+                // reconciliation, recorded BaseQuantity, close sizing) stays in one unit.
+                var filledBase = HtxContractConversion.ContractsToBase(filledContracts, contractSize);
                 var turnover = GetDecimal(order, "trade_turnover");
                 var fee = Math.Abs(GetDecimal(order, "fee"));
                 var averagePrice = GetDecimal(order, "trade_avg_price");
 
                 if (averagePrice <= 0 && turnover > 0)
-                    averagePrice = turnover / filledQuantity;
+                    averagePrice = turnover / filledBase;
 
-                return (filledQuantity, averagePrice, fee);
+                return (filledBase, averagePrice, fee);
             }
 
-            await Task.Delay(200, ct);
+            await Task.Delay(50, ct);
         }
 
         return (0m, 0m, 0m);
@@ -378,6 +411,42 @@ public sealed class HtxTradingClient : IExchangeTradingClient
         return JsonDocument.Parse(responseBody);
     }
 
+    /// <summary>
+    /// Number of base-asset units per HTX contract for the given contract_code, cached after first
+    /// lookup. Throws if HTX does not report a positive contract_size - sizing an order without it
+    /// would silently place a wildly wrong quantity, so failing loudly is the safe choice.
+    /// </summary>
+    private async Task<decimal> GetContractSizeAsync(
+        string contractCode,
+        CancellationToken ct)
+    {
+        if (_contractSizeCache.TryGetValue(contractCode, out var cached))
+            return cached;
+
+        using var document = await SendPublicGetJsonAsync(
+            path: _options.ContractInfoPath,
+            queryString: $"contract_code={Uri.EscapeDataString(contractCode)}",
+            ct: ct);
+
+        EnsureHtxSuccess(document.RootElement);
+
+        var data = TryGetPropertyIgnoreCase(document.RootElement, "data");
+
+        var contractSize = data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0
+            ? GetDecimal(data[0], "contract_size")
+            : 0m;
+
+        if (contractSize <= 0)
+        {
+            throw new InvalidOperationException(
+                $"HTX contract_size unavailable for {contractCode}; refusing to size an order without it.");
+        }
+
+        _contractSizeCache[contractCode] = contractSize;
+
+        return contractSize;
+    }
+
     public async Task<ExchangeSymbolRules?> GetSymbolRulesAsync(
         string tradingPair,
         CancellationToken ct)
@@ -423,6 +492,9 @@ public sealed class HtxTradingClient : IExchangeTradingClient
         var contractSize = GetDecimal(
             item,
             "contract_size");
+
+        if (contractSize > 0)
+            _contractSizeCache[contractCode] = contractSize;
 
         return new ExchangeSymbolRules(
             ConnectorName: ConnectorName,

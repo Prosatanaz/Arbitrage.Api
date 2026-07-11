@@ -12,7 +12,13 @@ public sealed class ExecutionOptions
 
     public int ArmExpiresAfterSeconds { get; init; } = 600;
 
-    public int MaxLegDelayMs { get; init; } = 1500;
+    // Per-leg budget covering BOTH order placement AND fill confirmation (the leg executor wraps
+    // the whole PlaceOrderAsync in this timeout). It must exceed a connector's worst-case
+    // place + fill-poll round-trip chain, or a filled order gets canceled mid-confirmation and
+    // reported as "failed to fill" (HTX's poll loop alone can need >1.5s). This is a
+    // confirmation-read budget, not a market-exposure bound - the IOC legs are terminal on the
+    // exchange almost immediately, so the naked-exposure window is far shorter than this value.
+    public int MaxLegDelayMs { get; init; } = 3500;
 
     public decimal MaxAllowedSlippagePct { get; init; } = 0.15m;
 
