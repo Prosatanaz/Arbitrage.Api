@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Arbitrage.Api.Application.Execution.Credentials;
 using Arbitrage.Api.Application.Execution.Trading;
 using Arbitrage.Api.Application.Instruments;
@@ -22,13 +24,22 @@ public sealed class GateIoTradingClient : IExchangeTradingClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        // Gate.io responses use snake_case (quanto_multiplier, order_size_min, fill_price, ...).
+        // PropertyNameCaseInsensitive only ignores case, NOT underscores, so without the snake_case
+        // naming policy every multi-word field silently deserialized to null - which left
+        // QuantoMultiplier null and made the client report "contract metadata unavailable".
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
     };
 
     private readonly HttpClient _httpClient;
     private readonly GateIoTradingOptions _options;
     private readonly GateIoAuthSigner _signer;
     private readonly ILogger<GateIoTradingClient> _logger;
+
+    // Contracts whose 1x leverage has already been enforced this process, so the leverage call runs
+    // once per contract rather than before every order.
+    private readonly ConcurrentDictionary<string, bool> _leverageConfigured = new(StringComparer.OrdinalIgnoreCase);
 
     public GateIoTradingClient(
         HttpClient httpClient,
@@ -48,6 +59,9 @@ public sealed class GateIoTradingClient : IExchangeTradingClient
     }
 
     public string ConnectorName => "gate_io_perpetual";
+
+    // Real signed position query (futures/usdt/positions) - trusted to confirm the account is flat.
+    public bool SupportsPositionReads => true;
 
     public async Task<ExchangeConnectionCheckResult> CheckConnectionAsync(
         ExchangeApiCredentialSecret credentials,
@@ -112,13 +126,43 @@ public sealed class GateIoTradingClient : IExchangeTradingClient
         ];
     }
 
-    public Task<IReadOnlyList<ExchangePositionSnapshot>> GetPositionsAsync(
+    public async Task<IReadOnlyList<ExchangePositionSnapshot>> GetPositionsAsync(
         ExchangeApiCredentialSecret credentials,
         CancellationToken ct)
     {
-        IReadOnlyList<ExchangePositionSnapshot> result = [];
+        var positions = await SendSignedAsync<List<GateIoPosition>>(
+            HttpMethod.Get,
+            "/api/v4/futures/usdt/positions",
+            "",
+            credentials,
+            ct);
 
-        return Task.FromResult(result);
+        var now = DateTimeOffset.UtcNow;
+        var result = new List<ExchangePositionSnapshot>();
+
+        foreach (var item in positions ?? [])
+        {
+            var sizeContracts = item.Size ?? 0;
+
+            // Gate.io returns a row per contract even when flat; only surface live exposure. Size is
+            // reported in CONTRACTS here (signed): non-zero is all the close reconciler needs, and
+            // converting to base units would require the per-contract multiplier the positions
+            // endpoint does not return.
+            if (sizeContracts == 0)
+                continue;
+
+            result.Add(new ExchangePositionSnapshot(
+                ConnectorName: ConnectorName,
+                TradingPair: item.Contract ?? "",
+                Size: Math.Abs(sizeContracts),
+                EntryPrice: ParseDecimal(item.EntryPrice),
+                MarkPrice: ParseDecimal(item.MarkPrice),
+                UnrealizedPnl: ParseDecimal(item.UnrealisedPnl),
+                Side: sizeContracts > 0 ? "long" : "short",
+                ReceivedAt: now));
+        }
+
+        return result;
     }
 
     public async Task<OrderFillResult> PlaceOrderAsync(
@@ -143,6 +187,12 @@ public sealed class GateIoTradingClient : IExchangeTradingClient
             throw new InvalidOperationException(
                 $"Gate.io contract metadata unavailable for '{contract}'.");
         }
+
+        // The carry-trade design is no-leverage. Gate.io otherwise opens at the position's current
+        // leverage; force isolated 1x before any opening order (cached per contract, skipped for
+        // reduce-only closes). Fail-closed: if it can't be set, the order is not placed.
+        if (!request.ReduceOnly)
+            await EnsureOneXLeverageAsync(contract, credentials, ct);
 
         var quantoMultiplier = ParseDecimal(contractInfo.QuantoMultiplier);
         var contractsSigned = (long)Math.Round(
@@ -195,6 +245,34 @@ public sealed class GateIoTradingClient : IExchangeTradingClient
             FilledAt: DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// Forces the contract to isolated 1x leverage before an opening order, so real positions are
+    /// never opened on the position's existing (leveraged) setting. Cached per contract. Fail-closed:
+    /// if leverage cannot be set the exception propagates and the order is not placed. Assumes the
+    /// account is in single (one-way) position mode - the same assumption the signed-size order uses.
+    /// </summary>
+    private async Task EnsureOneXLeverageAsync(
+        string contract,
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        if (_leverageConfigured.ContainsKey(contract))
+            return;
+
+        // Only the HTTP success matters here; the response body shape varies (a single position
+        // object or an array), so deserialize to a tolerant JsonElement instead of a typed DTO -
+        // a strict DTO here made a SUCCESSFUL leverage call throw and blocked the order.
+        await SendSignedAsync<JsonElement>(
+            HttpMethod.Post,
+            $"/api/v4/futures/usdt/positions/{Uri.EscapeDataString(contract)}/leverage",
+            "",
+            credentials,
+            ct,
+            queryString: "leverage=1");
+
+        _leverageConfigured[contract] = true;
+    }
+
     private async Task<(decimal FilledQuantity, decimal AveragePrice)> GetFillWithRetryAsync(
         string orderId,
         GateIoOrder createResponse,
@@ -223,7 +301,7 @@ public sealed class GateIoTradingClient : IExchangeTradingClient
             if (string.IsNullOrEmpty(orderId))
                 break;
 
-            await Task.Delay(200, ct);
+            await Task.Delay(50, ct);
 
             order = await SendSignedAsync<GateIoOrder>(
                 HttpMethod.Get,
@@ -284,8 +362,11 @@ public sealed class GateIoTradingClient : IExchangeTradingClient
                 request,
                 ct);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            // Surface WHY (HTTP status + body, or a deserialization failure) instead of collapsing
+            // silently to "contract metadata unavailable" upstream.
+            _logger.LogWarning(ex, "Gate.io contract metadata fetch failed for {Contract}.", contract);
             return null;
         }
     }
@@ -295,22 +376,27 @@ public sealed class GateIoTradingClient : IExchangeTradingClient
         string urlPath,
         string body,
         ExchangeApiCredentialSecret credentials,
-        CancellationToken ct)
+        CancellationToken ct,
+        string queryString = "")
     {
         var timestampSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
         var hashedBody = _signer.HashBody(body);
 
+        // Gate.io signs the query string separately from the path, so it must be passed through to
+        // both the signer and the request URI or the signature won't match.
         var signature = _signer.Sign(
             credentials.ApiSecret,
             method.Method,
             urlPath,
-            "",
+            queryString,
             hashedBody,
             timestampSeconds);
 
+        var requestUri = string.IsNullOrEmpty(queryString) ? urlPath : $"{urlPath}?{queryString}";
+
         using var request = new HttpRequestMessage(
             method,
-            urlPath);
+            requestUri);
 
         request.Headers.TryAddWithoutValidation("KEY", credentials.ApiKey);
         request.Headers.TryAddWithoutValidation("SIGN", signature);
@@ -405,23 +491,53 @@ public sealed class GateIoTradingClient : IExchangeTradingClient
 
         public long? Left { get; set; }
 
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
         public string? Price { get; set; }
 
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
         public string? FillPrice { get; set; }
 
         public string? Status { get; set; }
+    }
+
+    private sealed class GateIoPosition
+    {
+        public string? Contract { get; set; }
+
+        // Signed position size in CONTRACTS (positive = long, negative = short).
+        public long? Size { get; set; }
+
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
+        public string? EntryPrice { get; set; }
+
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
+        public string? MarkPrice { get; set; }
+
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
+        public string? UnrealisedPnl { get; set; }
+
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
+        public string? Leverage { get; set; }
     }
 
     private sealed class GateIoContract
     {
         public string? Name { get; set; }
 
+        // Gate.io returns these as a mix of JSON strings (quanto_multiplier, order_price_round) and
+        // raw numbers (order_size_min, order_size_max); the converter accepts either shape so the
+        // whole contract deserializes - a number into a plain string? field otherwise throws and the
+        // client reports "contract metadata unavailable", blocking every order.
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
         public string? QuantoMultiplier { get; set; }
 
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
         public string? OrderPriceRound { get; set; }
 
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
         public string? OrderSizeMin { get; set; }
 
+        [JsonConverter(typeof(FlexibleNumericStringConverter))]
         public string? OrderSizeMax { get; set; }
 
         public bool? InDelisting { get; set; }

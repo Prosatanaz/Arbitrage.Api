@@ -73,6 +73,21 @@ Net this session: 5 stacked fixes (detail-crash, close reconciliation, HTX leg
 confirmation-timeout, HTX contract-multiplier, Bybit no-leverage) - committed + pushed
 (a27ccca, e132fce, 649cb46, c42cb7e). First real open+close cycle succeeded.
 
+7. **Gate.io brought up to production trust + live-validated (4 arm attempts, 3 bugs).**
+   Same base fixes as Bitget (EnsureOneXLeverageAsync via positions/{contract}/leverage?leverage=1
+   fail-closed; real GetPositionsAsync via /futures/usdt/positions with SupportsPositionReads;
+   query-string support in the signer path; fill poll 200→50ms) plus two Gate.io-specific bugs
+   found live: (a) **snake_case JSON** — PropertyNameCaseInsensitive does not match underscores,
+   so quanto_multiplier/fill_price/etc all silently deserialized to null → "contract metadata
+   unavailable" blocked every order; fixed with JsonNamingPolicy.SnakeCaseLower + the flexible
+   numeric converter (order_size_min/max are raw numbers). (b) **set-leverage response shape** —
+   the call succeeds but the body isn't a single position object; strict DTO threw on a
+   successful call; fixed by deserializing to JsonElement. Live test H-USDT long Gate.io /
+   short HTX: quanto_multiplier sizing correct both ways (10 contracts = 100 base ≈ $6.7),
+   executor trimmed Gate.io 140→100 against HTX's contract_size=100 granularity, clean manual
+   close, PnL −0.04, all flat. Known gap: Gate.io per-trade fee still reports 0 (fills endpoint
+   not wired). Uncommitted.
+
 6. **Bitget brought up to production trust + live-validated.** Started expanding to the other
    8 connectors, one at a time (user picked Bitget first). Audit found the same two systematic
    gaps as Bybit/HTX: (a) leverage never forced to 1x, (b) `GetPositionsAsync` was an empty

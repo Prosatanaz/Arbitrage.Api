@@ -99,6 +99,25 @@ flat and closes the position if one opened — guaranteeing flatness without rel
 (per-exchange, often-unverified) position-read code. This is the right pattern for any new
 connector too.
 
+## Gate.io: snake_case JSON silently deserialized to null — check naming policy per connector (2026-07-11)
+
+Gate.io returns snake_case fields (`quanto_multiplier`, `fill_price`, `order_size_min`...).
+`PropertyNameCaseInsensitive = true` only ignores CASE — it does **not** match underscores — so
+every multi-word field silently deserialized to **null**. Effect: `QuantoMultiplier` was null →
+"contract metadata unavailable" → every Gate.io order blocked; position/fill prices would also
+have read as 0. Silent nulls, no exception. Fix: `PropertyNamingPolicy =
+JsonNamingPolicy.SnakeCaseLower` in the client's JsonSerializerOptions (plus
+`FlexibleNumericStringConverter` on fields Gate.io returns as raw numbers, e.g. `order_size_min`).
+Two follow-on lessons:
+- **Check every connector's JSON naming convention against its DTO deserializer** — a client can
+  "work" on single-word fields (balance `total`, order `size`) and break only where a multi-word
+  field matters.
+- **Config-style calls (set-leverage etc.) should deserialize tolerantly** (JsonElement) — Gate.io's
+  leverage endpoint SUCCEEDED but returned a body shape that didn't match the strict DTO, and the
+  deserialization throw masqueraded as an order failure. Only the HTTP status matters there.
+- Gate.io signs the query string separately from the path — a query-string param must go through
+  both the signer and the request URI.
+
 ## Bybit opened at the account's default leverage — "no leverage" was not enforced (2026-07-11)
 
 `BybitTradingClient.PlaceOrderAsync` placed a Market IOC order but never set leverage, so real
