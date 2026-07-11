@@ -69,9 +69,21 @@ uncommitted.
    (fail-closed if it can't be set); tolerates Bybit "not modified" ret-codes. Build + 44 tests
    green, rebuilt healthy. Uncommitted.
 
-Net this session: 5 stacked uncommitted fixes (detail-crash, close reconciliation, HTX leg
-confirmation-timeout, HTX contract-multiplier, Bybit no-leverage). First real open+close cycle
-succeeded. Kill switch back ON, all exchanges flat.
+Net this session: 5 stacked fixes (detail-crash, close reconciliation, HTX leg
+confirmation-timeout, HTX contract-multiplier, Bybit no-leverage) - committed + pushed
+(a27ccca, e132fce, 649cb46, c42cb7e). First real open+close cycle succeeded.
+
+6. **Bitget brought up to production trust + live-validated.** Started expanding to the other
+   8 connectors, one at a time (user picked Bitget first). Audit found the same two systematic
+   gaps as Bybit/HTX: (a) leverage never forced to 1x, (b) `GetPositionsAsync` was an empty
+   stub. Fixed in `BitgetTradingClient`: `EnsureOneXLeverageAsync` before opening orders
+   (hedge-aware - sets both long+short via set-leverage, cached per symbol, fail-closed);
+   real `GetPositionsAsync` via mix/position/all-position + `SupportsPositionReads=true`; fill
+   poll 200->50ms. Contract sizing was already correct (Bitget uses base coin, not contracts).
+   Live smoke test (EnabledConnectors overridden to [bitget, bybit] via env so trades force
+   through Bitget): BTW-USDT long Bybit / short Bitget, qty 160, clean open+close, PnL -0.069.
+   Logs confirmed set-leverage fired for long+short with no error, hedge order placed+filled,
+   close worked, all flat. Bitget now trusted like Bybit/HTX. Uncommitted.
 
 ## 2026-07-05 — Documentation pass (this session)
 Analyzed the whole repo (backend architecture, frontend, exchange connectors, execution

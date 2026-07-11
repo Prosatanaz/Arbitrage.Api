@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
@@ -25,6 +26,10 @@ public sealed class BitgetTradingClient : IExchangeTradingClient
     private readonly BitgetAuthSigner _signer;
     private readonly ILogger<BitgetTradingClient> _logger;
 
+    // Symbols whose 1x leverage has already been enforced this process, so set-leverage runs once
+    // per symbol rather than before every order.
+    private readonly ConcurrentDictionary<string, bool> _leverageConfigured = new(StringComparer.OrdinalIgnoreCase);
+
     public BitgetTradingClient(
         HttpClient httpClient,
         IOptions<BitgetTradingOptions> options,
@@ -43,6 +48,9 @@ public sealed class BitgetTradingClient : IExchangeTradingClient
     }
 
     public string ConnectorName => "bitget_perpetual";
+
+    // Real signed position query (mix/position/all-position) - trusted to confirm the account is flat.
+    public bool SupportsPositionReads => true;
 
     public async Task<ExchangeConnectionCheckResult> CheckConnectionAsync(
         ExchangeApiCredentialSecret credentials,
@@ -109,13 +117,44 @@ public sealed class BitgetTradingClient : IExchangeTradingClient
             .ToList<ExchangeBalanceSnapshot>();
     }
 
-    public Task<IReadOnlyList<ExchangePositionSnapshot>> GetPositionsAsync(
+    public async Task<IReadOnlyList<ExchangePositionSnapshot>> GetPositionsAsync(
         ExchangeApiCredentialSecret credentials,
         CancellationToken ct)
     {
-        IReadOnlyList<ExchangePositionSnapshot> result = [];
+        var queryString =
+            $"productType={Uri.EscapeDataString(_options.ProductType)}&marginCoin={Uri.EscapeDataString(_options.MarginCoin)}";
 
-        return Task.FromResult(result);
+        var response = await SendSignedGetAsync<BitgetEnvelope<List<BitgetPosition>>>(
+            path: "/api/v2/mix/position/all-position",
+            queryString: queryString,
+            credentials: credentials,
+            ct: ct);
+
+        EnsureBitgetSuccess(response);
+
+        var now = DateTimeOffset.UtcNow;
+        var result = new List<ExchangePositionSnapshot>();
+
+        foreach (var item in response.Data ?? [])
+        {
+            var size = ParseDecimal(item.Total);
+
+            // Only surface live exposure; a flat symbol reports zero size.
+            if (size <= 0)
+                continue;
+
+            result.Add(new ExchangePositionSnapshot(
+                ConnectorName: ConnectorName,
+                TradingPair: item.Symbol ?? "",
+                Size: size,
+                EntryPrice: ParseDecimal(item.OpenPriceAvg),
+                MarkPrice: ParseDecimal(item.MarkPrice),
+                UnrealizedPnl: ParseDecimal(item.UnrealizedPL),
+                Side: item.HoldSide ?? "",
+                ReceivedAt: now));
+        }
+
+        return result;
     }
 
     public async Task<OrderFillResult> PlaceOrderAsync(
@@ -133,6 +172,14 @@ public sealed class BitgetTradingClient : IExchangeTradingClient
 
         var isBuyRequest = request.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase);
         var isHedgeMode = _options.PositionMode.Equals("hedge", StringComparison.OrdinalIgnoreCase);
+
+        // The carry-trade design is no-leverage. Bitget otherwise opens at the account's default
+        // leverage; force 1x before any opening order (cached per symbol, skipped for reduce-only
+        // closes). Margin mode is left as configured (crossed) - at 1x liquidation risk is already
+        // removed, and switching Bitget margin mode is coupled to the order's marginMode + a flat
+        // account, so it is deliberately not forced here.
+        if (!request.ReduceOnly)
+            await EnsureOneXLeverageAsync(exchangeSymbol, isHedgeMode, credentials, ct);
 
         var orderBody = new Dictionary<string, object>
         {
@@ -192,6 +239,60 @@ public sealed class BitgetTradingClient : IExchangeTradingClient
             FilledAt: DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// Forces the symbol to 1x leverage before an opening order, so real positions are never opened
+    /// on the account's default (leveraged) setting. In hedge (two-way) mode leverage is per side, so
+    /// both long and short are set. Cached per symbol. Fail-closed: if leverage cannot be set to 1x
+    /// the exception propagates and the order is not placed.
+    /// </summary>
+    private async Task EnsureOneXLeverageAsync(
+        string exchangeSymbol,
+        bool isHedgeMode,
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        if (_leverageConfigured.ContainsKey(exchangeSymbol))
+            return;
+
+        if (isHedgeMode)
+        {
+            await SetLeverageAsync(exchangeSymbol, "long", credentials, ct);
+            await SetLeverageAsync(exchangeSymbol, "short", credentials, ct);
+        }
+        else
+        {
+            await SetLeverageAsync(exchangeSymbol, holdSide: null, credentials, ct);
+        }
+
+        _leverageConfigured[exchangeSymbol] = true;
+    }
+
+    private async Task SetLeverageAsync(
+        string exchangeSymbol,
+        string? holdSide,
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        var leverageBody = new Dictionary<string, object>
+        {
+            ["symbol"] = exchangeSymbol,
+            ["productType"] = _options.ProductType,
+            ["marginCoin"] = _options.MarginCoin,
+            ["leverage"] = "1"
+        };
+
+        if (holdSide is not null)
+            leverageBody["holdSide"] = holdSide;
+
+        var response = await SendSignedPostAsync<BitgetEnvelope<object>>(
+            path: "/api/v2/mix/account/set-leverage",
+            body: JsonSerializer.Serialize(leverageBody),
+            credentials: credentials,
+            ct: ct);
+
+        EnsureBitgetSuccess(response);
+    }
+
     private async Task<(decimal FilledQuantity, decimal AveragePrice, decimal FeePaid)> GetFillWithRetryAsync(
         string exchangeSymbol,
         string orderId,
@@ -221,7 +322,7 @@ public sealed class BitgetTradingClient : IExchangeTradingClient
                 return (filledQuantity, averagePrice, fee);
             }
 
-            await Task.Delay(200, ct);
+            await Task.Delay(50, ct);
         }
 
         return (0m, 0m, 0m);
@@ -482,6 +583,22 @@ public sealed class BitgetTradingClient : IExchangeTradingClient
         public string? Fee { get; set; }
 
         public string? State { get; set; }
+    }
+
+    private sealed class BitgetPosition
+    {
+        public string? Symbol { get; set; }
+
+        public string? HoldSide { get; set; }
+
+        // Position size in base coin (Bitget "total").
+        public string? Total { get; set; }
+
+        public string? OpenPriceAvg { get; set; }
+
+        public string? MarkPrice { get; set; }
+
+        public string? UnrealizedPL { get; set; }
     }
 
     private sealed class BitgetContract
