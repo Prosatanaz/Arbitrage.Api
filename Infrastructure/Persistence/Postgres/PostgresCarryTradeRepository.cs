@@ -196,6 +196,46 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
         return row.ToModel();
     }
 
+    public async Task<bool> MarkReconciledClosedAsync(
+        Guid id,
+        string closeReason,
+        decimal? realizedPnlUsd,
+        decimal? exitFeesUsd,
+        decimal? exitNetEdgePct,
+        CancellationToken ct)
+    {
+        const string sql = """
+        update carry_trades
+        set
+            status = 'Closed',
+            exit_fees_usd = @ExitFeesUsd,
+            exit_net_edge_pct = @ExitNetEdgePct,
+            realized_pnl_usd = @RealizedPnlUsd,
+            close_reason = @CloseReason,
+            closed_at = now(),
+            updated_at = now()
+        where id = @Id
+          and status in ('Open', 'Closing');
+        """;
+
+        await using var connection = await OpenConnectionAsync(ct);
+
+        var affected = await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    Id = id,
+                    CloseReason = closeReason,
+                    RealizedPnlUsd = realizedPnlUsd,
+                    ExitFeesUsd = exitFeesUsd,
+                    ExitNetEdgePct = exitNetEdgePct
+                },
+                cancellationToken: ct));
+
+        return affected > 0;
+    }
+
     public async Task<IReadOnlyList<CarryTrade>> ListRecentAsync(
         int hours,
         int limit,
@@ -326,13 +366,13 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
 
         await using var connection = await OpenConnectionAsync(ct);
 
-        var rows = await connection.QueryAsync<CarryTradeLeg>(
+        var rows = await connection.QueryAsync<CarryTradeLegRow>(
             new CommandDefinition(
                 sql,
                 new { TradeId = tradeId },
                 cancellationToken: ct));
 
-        return rows.ToList();
+        return rows.Select(r => r.ToModel()).ToList();
     }
 
     public async Task<IReadOnlyList<CarryTradeEvent>> ListEventsAsync(
@@ -355,13 +395,13 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
 
         await using var connection = await OpenConnectionAsync(ct);
 
-        var rows = await connection.QueryAsync<CarryTradeEvent>(
+        var rows = await connection.QueryAsync<CarryTradeEventRow>(
             new CommandDefinition(
                 sql,
                 new { TradeId = tradeId },
                 cancellationToken: ct));
 
-        return rows.ToList();
+        return rows.Select(r => r.ToModel()).ToList();
     }
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken ct)
@@ -480,6 +520,95 @@ public sealed class PostgresCarryTradeRepository : ICarryTradeRepository
                 ClosedAt: ClosedAt,
                 RealizedPnlUsd: RealizedPnlUsd,
                 Error: Error);
+        }
+    }
+
+    // Dapper materializes these mutable rows via property setters, which convert a
+    // timestamptz column (read as DateTime) into DateTimeOffset. Reading straight into the
+    // positional records instead makes Dapper require an exact-type constructor match and
+    // throw on the DateTime->DateTimeOffset mismatch - the same reason CarryTrade uses a Row.
+    private sealed class CarryTradeLegRow
+    {
+        public long Id { get; set; }
+
+        public Guid TradeId { get; set; }
+
+        public string Phase { get; set; } = "";
+
+        public string Connector { get; set; } = "";
+
+        public string Role { get; set; } = "";
+
+        public string Side { get; set; } = "";
+
+        public bool ReduceOnly { get; set; }
+
+        public decimal RequestedQuantity { get; set; }
+
+        public decimal FilledQuantity { get; set; }
+
+        public decimal AverageFillPrice { get; set; }
+
+        public decimal FeePaidUsd { get; set; }
+
+        public string ExchangeOrderId { get; set; } = "";
+
+        public string ClientOrderId { get; set; } = "";
+
+        public string Status { get; set; } = "";
+
+        public DateTimeOffset FilledAt { get; set; }
+
+        public DateTimeOffset CreatedAt { get; set; }
+
+        public CarryTradeLeg ToModel()
+        {
+            return new CarryTradeLeg(
+                Id: Id,
+                TradeId: TradeId,
+                Phase: Phase,
+                Connector: Connector,
+                Role: Role,
+                Side: Side,
+                ReduceOnly: ReduceOnly,
+                RequestedQuantity: RequestedQuantity,
+                FilledQuantity: FilledQuantity,
+                AverageFillPrice: AverageFillPrice,
+                FeePaidUsd: FeePaidUsd,
+                ExchangeOrderId: ExchangeOrderId,
+                ClientOrderId: ClientOrderId,
+                Status: Status,
+                FilledAt: FilledAt,
+                CreatedAt: CreatedAt);
+        }
+    }
+
+    private sealed class CarryTradeEventRow
+    {
+        public long Id { get; set; }
+
+        public Guid? TradeId { get; set; }
+
+        public Guid? AttemptId { get; set; }
+
+        public string EventType { get; set; } = "";
+
+        public string Reason { get; set; } = "";
+
+        public string? DetailsJson { get; set; }
+
+        public DateTimeOffset CreatedAt { get; set; }
+
+        public CarryTradeEvent ToModel()
+        {
+            return new CarryTradeEvent(
+                Id: Id,
+                TradeId: TradeId,
+                AttemptId: AttemptId,
+                EventType: EventType,
+                Reason: Reason,
+                DetailsJson: DetailsJson,
+                CreatedAt: CreatedAt);
         }
     }
 }

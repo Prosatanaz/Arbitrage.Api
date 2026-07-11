@@ -25,6 +25,20 @@ public interface ICarryTradeRepository
         string error,
         CancellationToken ct);
 
+    /// <summary>
+    /// Marks an Open/Closing trade Closed when a live position read confirmed both legs are already
+    /// flat even though the close orders did not fill. Exit prices are left null (no reliable exit
+    /// fill was captured); realized PnL/fees are recorded only if partial fills were captured, else
+    /// null. Returns false if the trade was no longer Open/Closing.
+    /// </summary>
+    Task<bool> MarkReconciledClosedAsync(
+        Guid id,
+        string closeReason,
+        decimal? realizedPnlUsd,
+        decimal? exitFeesUsd,
+        decimal? exitNetEdgePct,
+        CancellationToken ct);
+
     Task<IReadOnlyList<CarryTrade>> ListRecentAsync(
         int hours,
         int limit,

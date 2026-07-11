@@ -21,6 +21,7 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
     private readonly BestBidAskCache _bboCache;
     private readonly DepthCandidateEvaluator _depthEvaluator;
     private readonly CarryTradeLegExecutor _legExecutor;
+    private readonly CarryTradeCloseReconciler _closeReconciler;
     private readonly ExchangeCredentialService _credentialService;
     private readonly ExecutionOptions _executionOptions;
     private readonly ValidatedOpportunityOptions _opportunityOptions;
@@ -41,6 +42,7 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
         BestBidAskCache bboCache,
         DepthCandidateEvaluator depthEvaluator,
         CarryTradeLegExecutor legExecutor,
+        CarryTradeCloseReconciler closeReconciler,
         ExchangeCredentialService credentialService,
         IOptions<ExecutionOptions> executionOptions,
         IOptions<ValidatedOpportunityOptions> opportunityOptions,
@@ -50,6 +52,7 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
         _bboCache = bboCache;
         _depthEvaluator = depthEvaluator;
         _legExecutor = legExecutor;
+        _closeReconciler = closeReconciler;
         _credentialService = credentialService;
         _executionOptions = executionOptions.Value;
         _opportunityOptions = opportunityOptions.Value;
@@ -260,6 +263,17 @@ public sealed class CarryTradePositionMonitorWorker : BackgroundService
 
         if (!legResult.Success)
         {
+            // Before burning retries and finally marking Failed, reconcile against the real exchange
+            // state: reduce-only close orders are rejected on an already-flat account, which looks
+            // like a failure but actually means the position is gone. If both legs positively confirm
+            // flat, mark the trade Closed instead of letting the status lie as Closing/Failed.
+            if (await _closeReconciler.TryReconcileClosedAsync(
+                    trade, longCredentials, shortCredentials, reason, exitNetEdgePct, legResult, ct))
+            {
+                ResetCloseState();
+                return;
+            }
+
             await HandleCloseFailureAsync(trade, reason, legResult.FailureReason ?? "close failed", ct);
             return;
         }

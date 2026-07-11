@@ -65,6 +65,12 @@ public static class CarryTradeEventTypes
     public const string ExitFailed = "ExitFailed";
     public const string CloseRequested = "CloseRequested";
     public const string ManualInterventionRequired = "ManualInterventionRequired";
+
+    /// <summary>
+    /// A close whose orders did not fill, but a live position read confirmed both legs are already
+    /// flat - so the trade was marked Closed by reconciliation rather than looping/Failed.
+    /// </summary>
+    public const string CloseReconciled = "CloseReconciled";
 }
 
 /// <summary>

@@ -6,6 +6,15 @@ public interface IExchangeTradingClient
 {
     string ConnectorName { get; }
 
+    /// <summary>
+    /// Whether <see cref="GetPositionsAsync"/> returns a real, signed query of live positions
+    /// (rather than the empty-list stub the unverified connectors ship with). Only clients that
+    /// return true may be trusted to positively confirm an account is flat - used by close
+    /// reconciliation so a stub's empty list is never mistaken for "no position". Defaults to
+    /// false; only Bybit and HTX override it.
+    /// </summary>
+    bool SupportsPositionReads => false;
+
     Task<ExchangeConnectionCheckResult> CheckConnectionAsync(
         ExchangeApiCredentialSecret credentials,
         CancellationToken ct);
