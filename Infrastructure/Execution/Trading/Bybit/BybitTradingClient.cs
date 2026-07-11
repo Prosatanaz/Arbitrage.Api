@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Arbitrage.Api.Application.Execution.Credentials;
@@ -38,6 +39,18 @@ public sealed class BybitTradingClient : IExchangeTradingClient
     }
 
     public string ConnectorName => "bybit_perpetual";
+
+    // Real signed position query (v5/position/list) - trusted to confirm the account is flat.
+    public bool SupportsPositionReads => true;
+
+    // Bybit "not modified" ret-codes, treated as success: the desired margin mode / leverage was
+    // already in place (110026 = margin mode unchanged, 110043 = leverage unchanged).
+    private const int RetCodeMarginModeNotModified = 110026;
+    private const int RetCodeLeverageNotModified = 110043;
+
+    // Symbols whose margin mode + 1x leverage have already been enforced this process, so the
+    // config calls are made once per symbol rather than before every order.
+    private readonly ConcurrentDictionary<string, bool> _marginConfigured = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<ExchangeConnectionCheckResult> CheckConnectionAsync(
         ExchangeApiCredentialSecret credentials,
@@ -181,6 +194,71 @@ public sealed class BybitTradingClient : IExchangeTradingClient
         return result;
     }
 
+    /// <summary>
+    /// Forces the symbol to isolated margin at 1x leverage before an opening order, so real
+    /// positions are never opened on the account's default (leveraged) settings. Isolated is
+    /// best-effort (it is account-level and not per-symbol on Unified accounts, so a failure there
+    /// is logged, not fatal); the 1x leverage IS enforced - if it cannot be set, the order is not
+    /// placed. Both calls tolerate Bybit's "not modified" codes (already at the desired value) and
+    /// the result is cached per symbol so it runs once, not before every order.
+    /// </summary>
+    private async Task EnsureIsolatedOneXLeverageAsync(
+        string exchangeSymbol,
+        ExchangeApiCredentialSecret credentials,
+        CancellationToken ct)
+    {
+        if (_marginConfigured.ContainsKey(exchangeSymbol))
+            return;
+
+        // Best-effort: switch to isolated margin at 1x. On Unified accounts margin mode is
+        // account-level, so this can legitimately fail - log and continue to the leverage call.
+        try
+        {
+            var isolatedBody = JsonSerializer.Serialize(new
+            {
+                category = _options.Category,
+                symbol = exchangeSymbol,
+                tradeMode = 1, // 0 = cross, 1 = isolated
+                buyLeverage = "1",
+                sellLeverage = "1"
+            });
+
+            await SendSignedPostAsync<BybitSimpleResponse>(
+                path: "v5/position/switch-isolated",
+                body: isolatedBody,
+                credentials: credentials,
+                ct: ct,
+                toleratedRetCodes: new[] { RetCodeMarginModeNotModified, RetCodeLeverageNotModified });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Bybit switch-isolated failed for {Symbol}; proceeding to enforce 1x leverage only.",
+                exchangeSymbol);
+        }
+
+        // Mandatory: enforce 1x leverage. "Not modified" means it is already 1x (success). Any other
+        // failure means we cannot guarantee no leverage, so the exception propagates and the opening
+        // order is not placed - fail closed.
+        var leverageBody = JsonSerializer.Serialize(new
+        {
+            category = _options.Category,
+            symbol = exchangeSymbol,
+            buyLeverage = "1",
+            sellLeverage = "1"
+        });
+
+        await SendSignedPostAsync<BybitSimpleResponse>(
+            path: "v5/position/set-leverage",
+            body: leverageBody,
+            credentials: credentials,
+            ct: ct,
+            toleratedRetCodes: new[] { RetCodeLeverageNotModified });
+
+        _marginConfigured[exchangeSymbol] = true;
+    }
+
     public async Task<OrderFillResult> PlaceOrderAsync(
         ExchangeApiCredentialSecret credentials,
         PlaceOrderRequest request,
@@ -193,6 +271,14 @@ public sealed class BybitTradingClient : IExchangeTradingClient
             throw new InvalidOperationException(
                 $"Bybit symbol could not be derived for trading pair '{request.TradingPair}'.");
         }
+
+        // The carry-trade design is explicitly no-leverage. Bybit otherwise opens at the account's
+        // default leverage (commonly 10x), which - with no stop-loss and a thesis that a WIDER basis
+        // is a stronger signal - risks one leg being liquidated during divergence and turning the
+        // hedge into a naked position. Enforce isolated 1x before any opening order. Skipped for
+        // reduce-only closes (nothing to configure when flattening).
+        if (!request.ReduceOnly)
+            await EnsureIsolatedOneXLeverageAsync(exchangeSymbol, credentials, ct);
 
         var body = JsonSerializer.Serialize(new
         {
@@ -269,7 +355,8 @@ public sealed class BybitTradingClient : IExchangeTradingClient
         string path,
         string body,
         ExchangeApiCredentialSecret credentials,
-        CancellationToken ct)
+        CancellationToken ct,
+        int[]? toleratedRetCodes = null)
     {
         var timestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
         var recvWindow = _options.RecvWindowMs.ToString(CultureInfo.InvariantCulture);
@@ -316,7 +403,7 @@ public sealed class BybitTradingClient : IExchangeTradingClient
                 "Bybit response deserialization failed.");
         }
 
-        ValidateBybitEnvelope(parsed, responseBody);
+        ValidateBybitEnvelope(parsed, responseBody, toleratedRetCodes);
 
         return parsed;
     }
@@ -443,12 +530,14 @@ public sealed class BybitTradingClient : IExchangeTradingClient
 
     private static void ValidateBybitEnvelope<T>(
         T parsed,
-        string rawBody)
+        string rawBody,
+        int[]? toleratedRetCodes = null)
     {
         if (parsed is not IBybitResponseEnvelope envelope)
             return;
 
-        if (envelope.RetCode != 0)
+        if (envelope.RetCode != 0 &&
+            (toleratedRetCodes is null || !toleratedRetCodes.Contains(envelope.RetCode)))
         {
             throw new InvalidOperationException(
                 $"Bybit API returned error. RetCode={envelope.RetCode}, RetMsg={envelope.RetMsg}, Body={rawBody}");
@@ -565,6 +654,14 @@ public sealed class BybitTradingClient : IExchangeTradingClient
         public string RetMsg { get; set; } = "";
 
         public BybitOrderCreateResult? Result { get; set; }
+    }
+
+    // Envelope for config endpoints (set-leverage, switch-isolated) where only the ret-code matters.
+    private sealed class BybitSimpleResponse : IBybitResponseEnvelope
+    {
+        public int RetCode { get; set; }
+
+        public string RetMsg { get; set; } = "";
     }
 
     private sealed class BybitOrderCreateResult
